@@ -20,10 +20,10 @@ generate_password() {
 validate_port() {
   local port="${1:-}"
   [[ "$port" =~ ^[0-9]+$ ]] || return 1
-  (( port >= 1024 && port <= 65535 )) || return 1
+  (( 10#$port >= 1024 && 10#$port <= 65535 )) || return 1
   # 51820 is WireGuard's registered port. Every prior deployment exposed it
   # and was identified by port scan before any packet was inspected.
-  (( port == 51820 )) && return 1
+  (( 10#$port == 51820 )) && return 1
   return 0
 }
 
@@ -31,7 +31,7 @@ validate_ipv4() {
   local ip="${1:-}" octet
   [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
   for octet in ${ip//./ }; do
-    (( octet >= 0 && octet <= 255 )) || return 1
+    (( 10#$octet >= 0 && 10#$octet <= 255 )) || return 1
   done
   return 0
 }

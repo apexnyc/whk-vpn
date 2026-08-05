@@ -72,3 +72,19 @@ setup() {
   run validate_ipv4 not-an-ip
   [ "$status" -eq 1 ]
 }
+
+@test "validate_ipv4 rejects octet with leading zero out of decimal range" {
+  run validate_ipv4 203.0.113.0304
+  [ "$status" -eq 1 ]
+}
+
+@test "validate_port accepts leading-zero port in decimal range" {
+  run validate_port 01777
+  [ "$status" -eq 0 ]
+}
+
+@test "validate_ipv4 accepts octet 008 (decimal 8) without leaking stderr" {
+  run validate_ipv4 203.0.113.008
+  [ "$status" -eq 0 ]
+  [ -z "$stderr" ]
+}

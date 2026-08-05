@@ -10,6 +10,7 @@ __pycache__/
 # Secrets — never commit
 .env
 .env.deploy
+config.env
 *.pem
 *.key
 secrets/

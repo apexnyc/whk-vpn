@@ -16,7 +16,6 @@ require_cmd az
 require_az_login
 load_config "$REPO_ROOT/config.env"
 
-IP_NAME="${VM_NAME}-ip"
 NEW_IP_NAME="${VM_NAME}-ip-$(date +%Y%m%d%H%M%S)"
 
 az vm show -g "$RESOURCE_GROUP" -n "$VM_NAME" >/dev/null 2>&1 \
@@ -27,7 +26,16 @@ NIC_ID="$(az vm show -g "$RESOURCE_GROUP" -n "$VM_NAME" \
 NIC_NAME="${NIC_ID##*/}"
 IPCFG_NAME="$(az network nic show --ids "$NIC_ID" \
   --query "ipConfigurations[0].name" -o tsv)"
-OLD_IP="$(az network public-ip show -g "$RESOURCE_GROUP" -n "$IP_NAME" \
+
+# Identify the currently-attached public IP by querying the NIC directly --
+# never by a naming guess. Rotated addresses are timestamp-suffixed (see
+# NEW_IP_NAME below), so after the first rotation a fixed "$VM_NAME-ip" name
+# no longer matches what's actually attached; guessing wrong would silently
+# leave the real old IP undeleted and billing forever.
+OLD_IP_ID="$(az network nic show --ids "$NIC_ID" \
+  --query "ipConfigurations[0].publicIPAddress.id" -o tsv)"
+OLD_IP_NAME="${OLD_IP_ID##*/}"
+OLD_IP="$(az network public-ip show --ids "$OLD_IP_ID" \
   --query ipAddress -o tsv 2>/dev/null || echo 'none')"
 
 log_info "current address: $OLD_IP"
@@ -44,8 +52,11 @@ log_info "attaching the new address"
 az network nic ip-config update -g "$RESOURCE_GROUP" \
   --nic-name "$NIC_NAME" -n "$IPCFG_NAME" --public-ip-address "$NEW_IP_NAME" --output none
 
-log_info "deleting the old address so it stops billing"
-az network public-ip delete -g "$RESOURCE_GROUP" -n "$IP_NAME" --output none 2>/dev/null || true
+log_info "deleting the old address ($OLD_IP_NAME) so it stops billing"
+if [[ -n "$OLD_IP_ID" ]]; then
+  az network public-ip delete --ids "$OLD_IP_ID" --output none 2>/dev/null \
+    || log_warn "failed to delete old public IP ($OLD_IP_NAME) -- check for orphan billing"
+fi
 
 NEW_IP="$(az network public-ip show -g "$RESOURCE_GROUP" -n "$NEW_IP_NAME" \
   --query ipAddress -o tsv)"

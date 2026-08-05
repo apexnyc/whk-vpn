@@ -101,6 +101,11 @@ VPN_IMAGE_EXACT=$IMAGE_EXACT
 VPN_AMNEZIAWG_PORT=$AMNEZIAWG_PORT
 VPN_XRAY_PORT=$XRAY_PORT
 ENVFILE
+# umask only governs mode at creation; if .env already existed with weaker
+# permissions (leftover from another process, restored from backup, etc.)
+# the cat above would rewrite its contents but not tighten its mode. Force
+# the guarantee explicitly so it holds regardless of prior file state.
+chmod 600 "$REPO_ROOT/.env"
 
 cat <<BANNER
 

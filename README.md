@@ -37,18 +37,86 @@ deploying an obfuscated transport instead.
 - **Disposable infrastructure:** the server is rebuilt, not repaired. IP addresses are
   treated as consumable.
 
-## Layout
+## Setup
 
+Requires the Azure CLI (`brew install azure-cli`), an `az login` session, and
+the AmneziaVPN desktop client from https://amnezia.org.
+
+```bash
+cp config.env.example config.env   # edit if you want different values
+./scripts/provision.sh             # ~90s; prints IP, login, password
 ```
-docs/
-  azure-kwang-vpn-teardown-record-*.md   Configuration record of the retired Azure estate
-  superpowers/
-    specs/    Design documents
-    plans/    Implementation plans
+
+Then, in the AmneziaVPN desktop client, enter the printed IP, login, and
+password. It connects over SSH, installs Docker, and runs one container per
+protocol.
+
+**Install AmneziaWG first.** It needs no domain, certificate, or SNI target,
+so a failure means the pipeline is wrong rather than the protocol being
+detected. Use the UDP port shown in the banner — it is already open in the
+network security group. Add XRay REALITY afterwards on TCP 443; both run
+side by side as separate containers, which is what makes them comparable on
+one host.
+
+Share access to a client device using Amnezia's QR code, text key, or
+settings file. Server credentials never leave your machine.
+
+## Client devices
+
+Everyone installs the same app, **AmneziaVPN**, regardless of protocol.
+
+| Device | Source | Catch |
+|---|---|---|
+| iPhone / iPad | App Store | Needs a **non-mainland-China Apple ID**. Apple removed VPN apps from the China App Store in 2017. |
+| Android | APK from GitHub releases | Google Play is unavailable in mainland China; sideloading is normal there. |
+| Windows / macOS | Installer from GitHub releases | amnezia.org may be blocked; GitHub generally is not. |
+
+Downloading a VPN client from inside China is a chicken-and-egg problem.
+The reliable answer is to download the installer outside China and send the
+file directly.
+
+*Amnezia Premium* is a separate paid hosted service. Self-hosting is free and
+requires no account.
+
+## Recovery
+
+Test from inside China when the tunnel stops working:
+
+```bash
+ssh -p 22 user@<server_ip>
 ```
 
-## Open decisions
+| Result | Meaning | Action |
+|---|---|---|
+| SSH connects | Protocol signature is being matched | Change protocol or port. Rotating the IP will not help. |
+| SSH times out | Address is blackholed at the border | `./scripts/rotate-ip.sh` |
 
-- Obfuscated transport: AmneziaWG vs. Xray (VLESS + REALITY)
-- Hosting provider: flat-rate VPS vs. metered hyperscaler
-- Region: Japan East / Korea Central / East Asia are the strongest candidates by latency
+## Teardown
+
+```bash
+./scripts/destroy.sh
+```
+
+Deletes the resource group and then sweeps the whole subscription for
+unattached public IPs, NICs, and unused NSGs — Azure does not cascade VM
+deletion to networking, so orphans bill silently forever.
+
+## Measurement
+
+The first deployment exists to answer a question no analysis can: which
+protocol survives on the target connection, and for how long. Record for
+each trial: protocol, port, start date, failure date, and rough traffic
+volume before failure.
+
+Before concluding that a protocol is blocked, **confirm its NSG rule
+exists**. Azure's network security group and the VM's own iptables are
+independent layers and neither logs the other's drops, so a missing NSG rule
+looks exactly like censorship.
+
+## Development
+
+```bash
+brew install bats-core shellcheck
+bats tests/
+shellcheck -x -P SCRIPTDIR lib/*.sh scripts/*.sh
+```

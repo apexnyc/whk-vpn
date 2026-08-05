@@ -32,11 +32,20 @@ fi
 if az vm show -g "$RESOURCE_GROUP" -n "$VM_NAME" >/dev/null 2>&1; then
   log_warn "VM '$VM_NAME' already exists in '$RESOURCE_GROUP' -- nothing to create."
   log_warn "Run scripts/destroy.sh first if you want a clean rebuild."
+  # Look up the attached public IP via the NIC, not by guessing "$VM_NAME-ip":
+  # rotate-ip.sh timestamp-suffixes replacement addresses, so after even one
+  # rotation the fixed name no longer matches what's actually attached.
+  EXISTING_NIC_ID="$(az vm show -g "$RESOURCE_GROUP" -n "$VM_NAME" \
+    --query "networkProfile.networkInterfaces[0].id" -o tsv 2>/dev/null || true)"
+  EXISTING_IP_ID="$(az network nic show --ids "$EXISTING_NIC_ID" \
+    --query "ipConfigurations[0].publicIPAddress.id" -o tsv 2>/dev/null || true)"
+  EXISTING_IP="$(az network public-ip show --ids "$EXISTING_IP_ID" --query ipAddress -o tsv 2>/dev/null || echo 'unknown')"
+  log_info "current public IP: $EXISTING_IP  (login: $ADMIN_USER -- password is in .env if you still have it, otherwise re-run after scripts/destroy.sh for a fresh one)"
   exit 0
 fi
 
 log_info "creating resource group '$RESOURCE_GROUP' in '$LOCATION'"
-az group create -n "$RESOURCE_GROUP" -l "$LOCATION" --output none
+az group create -n "$RESOURCE_GROUP" -l "$LOCATION" --tags managed-by=whk-vpn --output none
 
 ADMIN_PASSWORD="$(generate_password)"
 

@@ -1,5 +1,7 @@
 #!/usr/bin/env bats
 
+bats_require_minimum_version 1.5.0
+
 setup() {
   REPO_ROOT="$( cd "$( dirname "$BATS_TEST_FILENAME" )/.." && pwd )"
   # shellcheck source=../lib/common.sh
@@ -84,7 +86,7 @@ setup() {
 }
 
 @test "validate_ipv4 accepts octet 008 (decimal 8) without leaking stderr" {
-  run validate_ipv4 203.0.113.008
+  run --separate-stderr validate_ipv4 203.0.113.008
   [ "$status" -eq 0 ]
   [ -z "$stderr" ]
 }

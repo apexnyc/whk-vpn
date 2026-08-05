@@ -2,7 +2,7 @@
 
 Automated provisioning of a censorship-resistant personal VPN endpoint.
 
-**Status: design stage.** Nothing is implemented yet.
+**Status: implemented and deployed.** `vpn-cn` is live in the `kwang-vpn` resource group.
 
 ## Goal
 
@@ -31,9 +31,11 @@ deploying an obfuscated transport instead.
 
 - **Target network:** ordinary Chinese home broadband — no roaming, no leased line
 - **Clients:** macOS and iPadOS (US App Store)
-- **Billing isolation:** must not share a billing boundary with trading infrastructure.
-  The prior deployment shared an Azure subscription with `apex-trading`; exhausting the
-  monthly credit disabled the entire subscription.
+- **Billing isolation:** not currently satisfied — accepted risk. This deployment shares
+  the same Azure subscription as `apex-trading` (see design doc Decision #5), which is the
+  same failure mode that took down the prior deployment when the monthly credit was
+  exhausted. Accepted for now because projected VPN spend (~$28/month) sits well within the
+  monthly credit; revisit if usage approaches the cap.
 - **Disposable infrastructure:** the server is rebuilt, not repaired. IP addresses are
   treated as consumable.
 
@@ -80,16 +82,29 @@ requires no account.
 
 ## Recovery
 
-Test from inside China when the tunnel stops working:
+SSH is NSG-restricted to the operator's own IP only (see `## Setup`'s NSG rules), so an
+SSH attempt from inside China is always dropped at the firewall regardless of whether
+censorship is actually happening there — it cannot distinguish anything. Port 443 (XRay
+REALITY), by contrast, is open to `*`, so probe that instead when the tunnel stops working:
 
 ```bash
-ssh -p 22 user@<server_ip>
+nc -vz <server_ip> 443
 ```
 
 | Result | Meaning | Action |
 |---|---|---|
-| SSH connects | Protocol signature is being matched | Change protocol or port. Rotating the IP will not help. |
-| SSH times out | Address is blackholed at the border | `./scripts/rotate-ip.sh` |
+| Connects (or "refused") | The address itself is reachable; protocol-level blocking is happening | Change protocol or port. Rotating the IP will not help. |
+| Times out | Address is blackholed at the border | `./scripts/rotate-ip.sh` |
+
+### Updating the SSH NSG rule
+
+If the operator's own public IP changes and SSH access to the VM is lost, update the
+`ssh` NSG rule to the new address:
+
+```bash
+az network nsg rule update -g kwang-vpn --nsg-name vpn-cn-nsg -n ssh \
+  --source-address-prefixes "$(curl -fsS https://api.ipify.org)"
+```
 
 ## Teardown
 

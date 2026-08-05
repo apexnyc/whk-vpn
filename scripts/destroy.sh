@@ -19,6 +19,16 @@ if [[ "$(az group exists -n "$RESOURCE_GROUP")" != "true" ]]; then
   exit 0
 fi
 
+# config.env is gitignored and never code-reviewed, and RESOURCE_GROUP is the only
+# thing that determines what gets deleted below. A typo or stale copy-paste there
+# could point this script at a resource group it did not create -- the confirmation
+# prompt only proves the operator typed back what the (possibly corrupted) config
+# already said, it does not prove the config is correct. Require the tag that
+# provision.sh's `az group create` stamps on so deletion is independent of trusting
+# config.env alone.
+TAG="$(az group show -n "$RESOURCE_GROUP" --query "tags.\"managed-by\"" -o tsv 2>/dev/null || true)"
+[[ "$TAG" == "whk-vpn" ]] || die "resource group '$RESOURCE_GROUP' is not tagged managed-by=whk-vpn -- refusing to delete a group this script did not create (check config.env for a mistake)"
+
 COUNT="$(az resource list -g "$RESOURCE_GROUP" --query "length(@)" -o tsv)"
 log_warn "about to permanently delete $COUNT resources in '$RESOURCE_GROUP'"
 az resource list -g "$RESOURCE_GROUP" --query "[].{name:name,type:type}" -o table

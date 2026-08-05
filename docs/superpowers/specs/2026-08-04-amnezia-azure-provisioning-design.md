@@ -89,8 +89,13 @@ its absence is what caused the orphan accumulation described above.
 
 Detaches the public IP, allocates a new one, attaches it to the same NIC. The VM, its
 Docker containers, and all protocol keys survive. This is the recovery path when an address
-is blocked at the border rather than the protocol being detected — the two failure modes are
-distinguished by whether SSH to the address still connects from inside China.
+is blocked at the border rather than the protocol being detected. The two failure modes are
+distinguished with a TCP probe against port 443 (XRay REALITY), not SSH: SSH is NSG-restricted
+to the operator's own IP only, so an SSH attempt from inside China is dropped at the firewall
+regardless of the actual censorship state and can never produce a useful reading. Port 443 is
+open to `*`, so `nc -vz <server_ip> 443` is meaningful — a connect (or "refused") means the
+address is reachable and the block is protocol-level, while a timeout means the address itself
+is blackholed at the border and rotation is the fix.
 
 ## Network security group rules
 
@@ -142,6 +147,15 @@ port 22 was open to the entire internet.
 **The Amnezia client receives the VM's admin password.** This is inherent to its design and
 is an accepted trust decision: the host is a single-purpose VPN box holding no other data,
 created and destroyed by these scripts.
+
+**The generated password is visible via `ps` for the duration of VM creation.**
+`provision.sh` passes it to `az vm create --admin-password` as a command-line argument,
+which any other process on the operator's own machine can read from the process table for
+the ~60-90 seconds the command runs. The Azure CLI provides no stdin-based alternative for
+this parameter. This is an accepted risk, consistent with the decision above that Amnezia's
+client also receives this same password over SSH: the exposure window is short, local to the
+operator's own machine, and the credential it exposes is one that is handed to the Amnezia
+client moments later anyway.
 
 **Generated credentials must never be committed.** The repository's `.gitignore` already
 excludes `configs/`, `*.conf`, `.env`, and `*.key` for this reason — VPN client

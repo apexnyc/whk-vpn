@@ -88,3 +88,61 @@ setup() {
   [ "$status" -eq 0 ]
   [ -z "$stderr" ]
 }
+
+@test "die exits with status 1" {
+  run die "something broke"
+  [ "$status" -eq 1 ]
+}
+
+@test "die writes the message to stderr" {
+  run --separate-stderr die "something broke"
+  [[ "$stderr" == *"something broke"* ]]
+}
+
+@test "require_cmd succeeds for a command that exists" {
+  run require_cmd bash
+  [ "$status" -eq 0 ]
+}
+
+@test "require_cmd dies for a command that does not exist" {
+  run require_cmd definitely-not-a-real-command
+  [ "$status" -eq 1 ]
+}
+
+@test "load_config dies when the file is missing" {
+  run load_config /nonexistent/config.env
+  [ "$status" -eq 1 ]
+}
+
+@test "load_config dies when AMNEZIAWG_PORT is 51820" {
+  cat > "$BATS_TEST_TMPDIR/bad.env" <<'CONF'
+RESOURCE_GROUP=kwang-vpn
+LOCATION=westus2
+VM_NAME=vpn-cn
+ADMIN_USER=kwang7
+AMNEZIAWG_PORT=51820
+CONF
+  run load_config "$BATS_TEST_TMPDIR/bad.env"
+  [ "$status" -eq 1 ]
+}
+
+@test "load_config dies when a required variable is missing" {
+  cat > "$BATS_TEST_TMPDIR/incomplete.env" <<'CONF'
+RESOURCE_GROUP=kwang-vpn
+LOCATION=westus2
+CONF
+  run load_config "$BATS_TEST_TMPDIR/incomplete.env"
+  [ "$status" -eq 1 ]
+}
+
+@test "load_config succeeds on a complete valid file" {
+  cat > "$BATS_TEST_TMPDIR/good.env" <<'CONF'
+RESOURCE_GROUP=kwang-vpn
+LOCATION=westus2
+VM_NAME=vpn-cn
+ADMIN_USER=kwang7
+AMNEZIAWG_PORT=44921
+CONF
+  run load_config "$BATS_TEST_TMPDIR/good.env"
+  [ "$status" -eq 0 ]
+}

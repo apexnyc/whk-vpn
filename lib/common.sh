@@ -35,3 +35,41 @@ validate_ipv4() {
   done
   return 0
 }
+
+log_info()  { printf '[INFO]  %s\n'  "$*" >&2; }
+log_warn()  { printf '[WARN]  %s\n'  "$*" >&2; }
+log_error() { printf '[ERROR] %s\n'  "$*" >&2; }
+
+die() { log_error "$*"; exit 1; }
+
+require_cmd() {
+  command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"
+}
+
+require_az_login() {
+  az account show >/dev/null 2>&1 \
+    || die "not logged in to Azure. Run: az login"
+}
+
+detect_public_ip() {
+  local ip
+  ip="$(curl -fsS --max-time 10 https://api.ipify.org 2>/dev/null || true)"
+  validate_ipv4 "$ip" || die "could not determine your public IP; set SSH_ALLOWED_IP in config.env"
+  printf '%s' "$ip"
+}
+
+load_config() {
+  local path="${1:-}"
+  [[ -f "$path" ]] || die "config file not found: $path (copy config.env.example)"
+  # shellcheck disable=SC1090
+  source "$path"
+
+  local var
+  for var in RESOURCE_GROUP LOCATION VM_NAME ADMIN_USER AMNEZIAWG_PORT; do
+    [[ -n "${!var:-}" ]] || die "config.env is missing required setting: $var"
+  done
+
+  validate_port "$AMNEZIAWG_PORT" \
+    || die "AMNEZIAWG_PORT '$AMNEZIAWG_PORT' is invalid. Use 1024-65535, and not 51820."
+  return 0
+}

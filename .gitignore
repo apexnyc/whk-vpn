@@ -1,0 +1,20 @@
+__pycache__/
+*.pyc
+.venv/
+.python_packages/
+.pytest_cache/
+.mypy_cache/
+.coverage
+.DS_Store
+
+# Secrets — never commit
+.env
+.env.deploy
+*.pem
+*.key
+secrets/
+
+# Generated VPN client configs contain private keys
+configs/
+*.conf
+!examples/*.conf

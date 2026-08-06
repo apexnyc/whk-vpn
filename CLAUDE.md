@@ -4,11 +4,17 @@ Censorship-resistant personal VPN endpoints on Azure, for use from mainland Chin
 
 ## Algo VPN (current approach)
 
-`~/Command/algo-vpn.sh` provisions and tears down Algo VPN endpoints. It runs
+`scripts/algo-vpn.sh` (also copied to `~/Command/algo-vpn.sh` for convenience
+on this machine) provisions and tears down Algo VPN endpoints. It runs
 [apexnyc/algo-vpn](https://github.com/apexnyc/algo-vpn) — a fork of
 trailofbits/algo patched to skip every interactive prompt and stream its
 generated client configs back over the same SSH session, instead of needing
 a separate pull step.
+
+On a machine that doesn't have the Azure CLI yet, run
+`scripts/setup-environment.sh` first — installs `az` (Homebrew on macOS,
+Microsoft's apt/dnf repo on Linux) and runs `az login` if needed. Safe to
+re-run; every check is a no-op once already satisfied.
 
 ```bash
 # Create an endpoint. Omit the region for an interactive 1/2/3 prompt.

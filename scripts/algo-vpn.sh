@@ -203,9 +203,14 @@ cmd_create() {
     | tar xzf - -C "$CONFIGS_DIR"
 
   ln -sfn "$config_dir" "$CONFIGS_DIR/$VM_NAME"
-  log_info "done -- VM_NAME=$VM_NAME VM_IP=$vm_ip"
-  log_info "configs at $CONFIGS_DIR/$VM_NAME -> $config_dir"
   find "$CONFIGS_DIR/$config_dir" -type f | sort
+
+  echo
+  echo "=================================================="
+  echo " VPN ready: $VM_NAME  ($region / $LOCATION)"
+  echo " IP address: $vm_ip"
+  echo " Configs:    $CONFIGS_DIR/$VM_NAME"
+  echo "=================================================="
 }
 
 cmd_list() {

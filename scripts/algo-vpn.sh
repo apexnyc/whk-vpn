@@ -15,14 +15,13 @@
 # scripts/setup-environment.sh first.
 set -euo pipefail
 
-REPO_ROOT="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." && pwd )"
 RESOURCE_GROUP="kwang-vpn"
 ADMIN_USER="kwang7"
 VM_SIZE="Standard_B1s"
 IMAGE="Canonical:ubuntu-24_04-lts:server:24.04.202608020"
 ALGO_REPO="https://github.com/apexnyc/algo-vpn.git"
 WIREGUARD_PORT=51820
-CONFIGS_DIR="$REPO_ROOT/configs"
+CONFIGS_DIR="$HOME/Desktop/vpn"
 
 log_info()  { printf '[INFO]  %s\n'  "$*" >&2; }
 log_warn()  { printf '[WARN]  %s\n'  "$*" >&2; }

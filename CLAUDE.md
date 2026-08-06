@@ -33,8 +33,8 @@ algo-vpn.sh destroy algo-vpn-uk --yes   # skip the type-to-confirm prompt
 
 All three regions share the `kwang-vpn` resource group and can run at the same
 time. Generated WireGuard/IPsec client configs land in
-`~/ProjectX/whk-vpn/configs/<public-ip>/`, with a friendly symlink at
-`~/ProjectX/whk-vpn/configs/<vm-name>` pointing at it.
+`~/Desktop/vpn/<public-ip>/` (created if it doesn't exist), with a friendly
+symlink at `~/Desktop/vpn/<vm-name>` pointing at it.
 
 ## Amnezia VPN (earlier approach, retired)
 

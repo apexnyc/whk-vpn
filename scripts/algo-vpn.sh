@@ -220,6 +220,41 @@ EOF
   ln -sfn "$config_dir" "$CONFIGS_DIR/$VM_NAME"
   find "$CONFIGS_DIR/$config_dir" -type f | sort
 
+  # Automatically import config into WireGuard GUI on macOS if available
+  local client_conf=""
+  if [[ -f "$CONFIGS_DIR/$config_dir/wireguard/license_2.conf" ]]; then
+    client_conf="$CONFIGS_DIR/$config_dir/wireguard/license_2.conf"
+  elif [[ -f "$CONFIGS_DIR/$config_dir/wireguard/license_0.conf" ]]; then
+    client_conf="$CONFIGS_DIR/$config_dir/wireguard/license_0.conf"
+  else
+    client_conf="$(find "$CONFIGS_DIR/$config_dir/wireguard" -name "*.conf" 2>/dev/null | head -n 1)"
+  fi
+
+  if [[ -n "$client_conf" && -d "/Applications/WireGuard.app" ]]; then
+    local named_conf="$CONFIGS_DIR/$config_dir/$VM_NAME.conf"
+    cp "$client_conf" "$named_conf"
+    log_info "importing $VM_NAME into WireGuard GUI..."
+    osascript -e '
+    on run argv
+      set confPath to item 1 of argv
+      tell application "WireGuard" to activate
+      delay 0.5
+      tell application "System Events"
+        tell process "WireGuard"
+          keystroke "o" using {command down}
+          delay 1.0
+          keystroke "g" using {command down, shift down}
+          delay 1.0
+          keystroke confPath
+          delay 0.5
+          keystroke return
+          delay 0.8
+          keystroke return
+        end tell
+      end tell
+    end run' "$named_conf" >/dev/null 2>&1 || log_warn "could not auto-import into WireGuard GUI"
+  fi
+
   echo
   echo "=================================================="
   echo " VPN ready: $VM_NAME  ($region / $LOCATION)"

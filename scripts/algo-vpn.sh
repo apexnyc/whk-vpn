@@ -36,9 +36,21 @@ require_az_login() {
 
 detect_public_ip() {
   local ip
-  ip="$(curl -fsS --max-time 10 https://api.ipify.org 2>/dev/null || true)"
-  [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "could not determine your public IP"
-  printf '%s' "$ip"
+  local services=(
+    "https://api.ipify.org"
+    "https://icanhazip.com"
+    "https://ifconfig.me"
+    "https://ipinfo.io/ip"
+    "https://ident.me"
+  )
+  for svc in "${services[@]}"; do
+    ip="$(curl -fsS --max-time 5 "$svc" 2>/dev/null | tr -d '[:space:]' || true)"
+    if [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+      printf '%s' "$ip"
+      return 0
+    fi
+  done
+  die "could not determine your public IP"
 }
 
 usage() {

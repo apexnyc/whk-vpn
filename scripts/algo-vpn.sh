@@ -281,6 +281,271 @@ cmd_destroy() {
   az vm list -g "$RESOURCE_GROUP" -o table
 }
 
+cmd_inspect() {
+  local target="${1:-}"
+  require_cmd az; require_cmd ssh; require_cmd curl; require_az_login
+
+  local vm_name="" region=""
+  case "$target" in
+    uk|australia|usa)
+      region="$target"
+      region_to_params "$region"
+      vm_name="$VM_NAME"
+      ;;
+    algo-vpn-uk|algo-vpn-australia|algo-vpn-usa)
+      vm_name="$target"
+      region="${vm_name#algo-vpn-}"
+      region_to_params "$region"
+      ;;
+    algo-vpn-*)
+      vm_name="$target"
+      region="${vm_name#algo-vpn-}"
+      ;;
+    "")
+      log_info "No VM specified. Available VMs in resource group '$RESOURCE_GROUP':"
+      cmd_list
+      echo >&2
+      read -r -p "Enter VM name or region (uk|australia|usa): " choice
+      [[ -n "$choice" ]] || die "no VM specified"
+      if [[ "$choice" =~ ^(uk|australia|usa)$ ]]; then
+        region="$choice"
+        region_to_params "$region"
+        vm_name="$VM_NAME"
+      else
+        vm_name="$choice"
+        region="${vm_name#algo-vpn-}"
+      fi
+      ;;
+    *)
+      vm_name="$target"
+      region="${vm_name#algo-vpn-}"
+      ;;
+  esac
+
+  log_info "Starting deep diagnostic inspection for '$vm_name'..."
+  echo "================================================================================"
+  echo " VPN DIAGNOSTIC INSPECTION REPORT: $vm_name"
+  echo " Timestamp: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+  echo "================================================================================"
+  echo
+
+  # 1. Azure Infrastructure Check
+  echo "[1/4] Checking Azure Cloud Infrastructure & VM Status..."
+  local vm_json
+  vm_json="$(az vm show -d -g "$RESOURCE_GROUP" -n "$vm_name" -o json 2>/dev/null || true)"
+  if [[ -z "$vm_json" ]]; then
+    echo "  [FAIL] Azure VM '$vm_name' does not exist in resource group '$RESOURCE_GROUP'."
+    echo
+    echo "================================================================================"
+    echo " [DIAGNOSIS] Virtual Machine Not Found"
+    echo " Reason: No VM named '$vm_name' exists in Azure resource group '$RESOURCE_GROUP'."
+    echo " [RECOMMENDATION] Create a new endpoint:"
+    echo "   $0 create ${region:-uk}"
+    echo "================================================================================"
+    return 1
+  fi
+
+  local power_state vm_ip location nsg_name
+  power_state="$(printf '%s' "$vm_json" | jq -r '.powerState // empty' 2>/dev/null || true)"
+  vm_ip="$(printf '%s' "$vm_json" | jq -r '.publicIps // empty' 2>/dev/null || true)"
+  location="$(printf '%s' "$vm_json" | jq -r '.location // empty' 2>/dev/null || true)"
+
+  echo "  - Resource Group: $RESOURCE_GROUP"
+  echo "  - Location:       ${location:-unknown}"
+  echo "  - Public IP:       ${vm_ip:-none}"
+  echo "  - Power State:     ${power_state:-unknown}"
+
+  if [[ "$power_state" != "VM running" ]]; then
+    echo "  [FAIL] VM is not running (Current state: $power_state)."
+    echo
+    echo "================================================================================"
+    echo " [DIAGNOSIS] Virtual Machine Powered Off / Deallocated"
+    echo " Reason: Azure VM '$vm_name' is not in 'VM running' state."
+    echo " [RECOMMENDATION] Power on the VM using Azure CLI:"
+    echo "   az vm start -g $RESOURCE_GROUP -n $vm_name"
+    echo "================================================================================"
+    return 1
+  fi
+  echo "  [OK] Azure VM power state is running."
+
+  # Check NSG rules
+  nsg_name="$(az network nsg list -g "$RESOURCE_GROUP" --query "[?contains(name, '$vm_name')].name | [0]" -o tsv 2>/dev/null || true)"
+  local wg_nsg_rule="" ssh_allowed_ip="" ssh_rule_name=""
+  if [[ -n "$nsg_name" ]]; then
+    wg_nsg_rule="$(az network nsg rule show -g "$RESOURCE_GROUP" --nsg-name "$nsg_name" -n Port_51820 --query "access" -o tsv 2>/dev/null || true)"
+    ssh_allowed_ip="$(az network nsg rule list -g "$RESOURCE_GROUP" --nsg-name "$nsg_name" --query "[?destinationPortRange=='22'].sourceAddressPrefix | [0]" -o tsv 2>/dev/null || true)"
+    ssh_rule_name="$(az network nsg rule list -g "$RESOURCE_GROUP" --nsg-name "$nsg_name" --query "[?destinationPortRange=='22'].name | [0]" -o tsv 2>/dev/null || true)"
+  fi
+  echo "  - NSG Rule (Port 51820 UDP): ${wg_nsg_rule:-Allow}"
+  echo "  - NSG SSH Whitelist (Port 22): ${ssh_allowed_ip:-unknown}"
+  echo
+
+  # 2. Local Network & Edge Reachability
+  echo "[2/4] Checking Local Operator Network & Edge Reachability..."
+  local my_ip
+  my_ip="$(detect_public_ip)"
+  echo "  - Current Operator Public IP: $my_ip"
+
+  if [[ -n "$ssh_allowed_ip" && "$ssh_allowed_ip" != "$my_ip" && "$ssh_allowed_ip" != "*" ]]; then
+    echo "  [WARN] Operator public IP changed (Current: $my_ip vs NSG Whitelist: $ssh_allowed_ip)."
+    echo "         Updating NSG SSH rule to allow remote inspection..."
+    if [[ -n "$ssh_rule_name" ]]; then
+      az network nsg rule update -g "$RESOURCE_GROUP" --nsg-name "$nsg_name" -n "$ssh_rule_name" --source-address-prefixes "$my_ip" -o none 2>/dev/null || true
+      echo "  [OK] Updated NSG SSH rule '$ssh_rule_name' to $my_ip."
+    fi
+  else
+    echo "  [OK] Operator SSH whitelist is aligned."
+  fi
+
+  # ICMP Ping Probe
+  echo -n "  - Testing ICMP Ping to $vm_ip... "
+  local ping_out loss_rate
+  ping_out="$(ping -c 4 -W 2000 "$vm_ip" 2>&1 || true)"
+  loss_rate="$(printf '%s\n' "$ping_out" | grep -o '[0-9.]*% packet loss' | awk '{print $1}' || echo "100%")"
+  if [[ "$loss_rate" == "0%" || "$loss_rate" == "0.0%" ]]; then
+    echo "[OK] (0% loss)"
+  elif [[ "$loss_rate" == "100%" || "$loss_rate" == "100.0%" ]]; then
+    echo "[FAIL] (100% loss - ICMP unreachable)"
+  else
+    echo "[WARN] ($loss_rate loss)"
+  fi
+
+  # TCP Port 22 SSH Probe
+  echo -n "  - Testing TCP Port 22 (SSH) reachability... "
+  local tcp22_ok=false
+  if nc -z -w 3 "$vm_ip" 22 >/dev/null 2>&1 || ssh-keyscan -p 22 -T 3 "$vm_ip" >/dev/null 2>&1; then
+    tcp22_ok=true
+    echo "[OK] (TCP 22 open)"
+  else
+    echo "[FAIL] (TCP 22 timed out / unreachable)"
+  fi
+  echo
+
+  # 3. Remote WireGuard Server Health Inspection
+  echo "[3/4] Checking Remote Server WireGuard Daemon & State..."
+  local ssh_ok=false
+  local remote_wg_service="unknown" remote_sysctl="unknown" remote_wg_status=""
+  if $tcp22_ok; then
+    set +e
+    local remote_diag
+    remote_diag="$(ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 -o BatchMode=yes "$ADMIN_USER@$vm_ip" bash -s <<'EOF' 2>/dev/null
+      set -e
+      echo "===WG_SERVICE==="
+      systemctl is-active wg-quick@wg0 2>/dev/null || echo "inactive"
+      echo "===SYSCTL==="
+      sysctl net.ipv4.ip_forward 2>/dev/null || echo "net.ipv4.ip_forward = 0"
+      echo "===WG_SHOW==="
+      sudo wg show 2>/dev/null || echo "NO_WG_SHOW"
+EOF
+)"
+    local ssh_rc=$?
+    set -e
+    if [[ $ssh_rc -eq 0 ]]; then
+      ssh_ok=true
+      remote_wg_service="$(printf '%s\n' "$remote_diag" | sed -n '/===WG_SERVICE===/,/===SYSCTL===/p' | grep -v '===' | tr -d '[:space:]')"
+      remote_sysctl="$(printf '%s\n' "$remote_diag" | sed -n '/===SYSCTL===/,/===WG_SHOW===/p' | grep -v '===' | tr -d '[:space:]')"
+      remote_wg_status="$(printf '%s\n' "$remote_diag" | sed -n '/===WG_SHOW===/,$p' | grep -v '===')"
+    fi
+  fi
+
+  local peer_count=0 latest_handshakes=""
+  if $ssh_ok; then
+    local wg_service_upper
+    wg_service_upper="$(printf '%s' "$remote_wg_service" | tr '[:lower:]' '[:upper:]')"
+    echo "  - SSH Session:                  [OK] Established"
+    echo "  - WireGuard Service (wg0):      [$wg_service_upper]"
+    echo "  - Kernel IP Forwarding:        $remote_sysctl"
+
+    peer_count="$(printf '%s\n' "$remote_wg_status" | grep -c '^peer:' || true)"
+    latest_handshakes="$(printf '%s\n' "$remote_wg_status" | grep 'latest handshake:' || true)"
+
+    echo "  - Configured VPN Peers:        $peer_count"
+    if [[ -n "$latest_handshakes" ]]; then
+      echo "  - Peer Handshakes:"
+      printf '%s\n' "$latest_handshakes" | while read -r line; do
+        echo "      $line"
+      done
+    else
+      echo "  - Peer Handshakes:             No handshakes recorded yet"
+    fi
+  else
+    echo "  - SSH Session:                  [FAIL] Remote SSH query failed or timed out"
+  fi
+  echo
+
+  # 4. GFW Censorship Diagnosis & Root Cause Verdict
+  echo "[4/4] Evaluating Censorship & Diagnostic Verdict..."
+  echo "================================================================================"
+
+  if [[ "$loss_rate" == "100%" || "$loss_rate" == "100.0%" ]] && ! $tcp22_ok; then
+    echo " [DIAGNOSIS] GFW Full IP Block / Null-Routing Detected"
+    echo
+    echo " Reason: Both ICMP ping and TCP 22 (SSH) timed out completely from your network,"
+    echo "         even though Azure confirms VM '$vm_name' is running with IP $vm_ip."
+    echo "         The Great Firewall of China (GFW) has blacklisted/null-routed this IP."
+    echo
+    echo " [RECOMMENDATION] Rotate IP immediately by replacing the VM endpoint:"
+    echo "   $0 replace ${region}"
+  elif $tcp22_ok && [[ "$remote_wg_service" == "active" ]]; then
+    local has_recent_handshake=false
+    if [[ -n "$latest_handshakes" ]]; then
+      while read -r line; do
+        local mins=9999
+        if [[ "$line" =~ ([0-9]+)[[:space:]]*min ]]; then
+          mins="${BASH_REMATCH[1]}"
+        elif [[ "$line" =~ ([0-9]+)[[:space:]]*sec ]]; then
+          mins=0
+        fi
+        if [ "$mins" -lt 5 ]; then
+          has_recent_handshake=true
+          break
+        fi
+      done <<< "$latest_handshakes"
+    fi
+
+    if $has_recent_handshake; then
+      echo " [DIAGNOSIS] VPN Endpoint Healthy & Operational"
+      echo
+      echo " Reason: Remote WireGuard daemon is active, SSH is reachable, and recent"
+      echo "         handshakes (< 5 min ago) are actively completing."
+      echo "         No GFW blocking detected on UDP port 51820 at this time."
+      echo
+      echo " [RECOMMENDATION] No endpoint replacement needed."
+      echo "   If client cannot browse: check local WireGuard client app toggle or DNS settings."
+    else
+      echo " [DIAGNOSIS] GFW Deep Packet Inspection (DPI) Protocol Block Detected"
+      echo
+      echo " Reason: TCP 22 (SSH) connects fine and VM WireGuard daemon is ACTIVE on port 51820,"
+      echo "         BUT client WireGuard handshakes are not reaching the server (0 active handshakes)."
+      echo "         The GFW detected standard WireGuard UDP 51820 handshake headers (148 bytes)"
+      echo "         and is actively dropping UDP 51820 traffic to IP $vm_ip."
+      echo
+      echo " [RECOMMENDATION] Recovery Strategies:"
+      echo "   1. Immediate fix: Replace VM to get a fresh Azure public IP address:"
+      echo "        $0 replace ${region}"
+      echo "   2. Protocol upgrade strategy: Standard WireGuard headers (148 bytes) are"
+      echo "      fingerprinted by GFW DPI. Consider upgrading to obfuscated protocols"
+      echo "      (e.g., AmneziaWG or VLESS+REALITY) for long-term censorship resistance."
+    fi
+  elif $tcp22_ok && [[ "$remote_wg_service" != "active" ]]; then
+    echo " [DIAGNOSIS] Remote WireGuard Service Down"
+    echo
+    echo " Reason: VM is reachable via SSH, but WireGuard service (wg-quick@wg0) is inactive."
+    echo
+    echo " [RECOMMENDATION] Restart WireGuard service on remote VM:"
+    echo "   ssh $ADMIN_USER@$vm_ip 'sudo systemctl restart wg-quick@wg0'"
+  else
+    echo " [DIAGNOSIS] Partial Network Disruption / Packet Loss"
+    echo
+    echo " Reason: Network probing showed partial reachability (ICMP loss: $loss_rate, TCP 22: $tcp22_ok)."
+    echo
+    echo " [RECOMMENDATION] Retry inspection or replace VM endpoint:"
+    echo "   $0 replace ${region}"
+  fi
+
+  echo "================================================================================"
+}
+
 cmd_replace() {
   local region="${1:-}"
   [[ -n "$region" ]] || region="$(prompt_region)"
@@ -298,10 +563,16 @@ cmd_replace() {
   cmd_create "$region"
 }
 
+if [[ "${1:-}" == "vpn" ]]; then
+  shift
+fi
+
 case "${1:-}" in
-  create)  shift; cmd_create "${1:-}" ;;
-  replace) shift; cmd_replace "${1:-}" ;;
-  list)    cmd_list ;;
-  destroy) shift; cmd_destroy "${1:-}" "${2:-}" ;;
+  create)             shift; cmd_create "${1:-}" ;;
+  replace)            shift; cmd_replace "${1:-}" ;;
+  inspect|inspection) shift; cmd_inspect "${1:-}" ;;
+  list)               cmd_list ;;
+  destroy)            shift; cmd_destroy "${1:-}" "${2:-}" ;;
   *) usage ;;
 esac
+

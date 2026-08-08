@@ -18,17 +18,21 @@ re-run; every check is a no-op once already satisfied.
 
 ```bash
 # Create an endpoint. Omit the region for an interactive 1/2/3 prompt.
-algo-vpn.sh create uk          # uksouth        -> VM algo-vpn-uk
-algo-vpn.sh create australia   # australiaeast  -> VM algo-vpn-australia
-algo-vpn.sh create usa         # eastus         -> VM algo-vpn-usa
+vpn create uk          # uksouth        -> VM algo-vpn-uk
+vpn create australia   # australiaeast  -> VM algo-vpn-australia
+vpn create usa         # eastus         -> VM algo-vpn-usa
+
+# Inspect why a VPN endpoint is blocked or unreachable (Azure, GFW DPI, IP null-route)
+vpn inspect usa        # or: vpn inspect algo-vpn-usa
+vpn inspect uk
 
 # See what's currently running
-algo-vpn.sh list
+vpn list
 
 # Tear down one endpoint by name -- only that VM and its own NIC/public
 # IP/NSG/disk are deleted; other VMs in the resource group are untouched.
-algo-vpn.sh destroy algo-vpn-uk
-algo-vpn.sh destroy algo-vpn-uk --yes   # skip the type-to-confirm prompt
+vpn destroy algo-vpn-uk
+vpn destroy algo-vpn-uk --yes   # skip the type-to-confirm prompt
 ```
 
 All three regions share the `kwang-vpn` resource group and can run at the same

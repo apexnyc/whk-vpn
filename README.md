@@ -41,7 +41,15 @@ Provision a new VPN endpoint in a specific region (`uk`, `australia`, or `usa`).
 ./scripts/algo-vpn.sh create usa         # eastus         -> VM algo-vpn-usa
 ```
 
-Generated client configs land in `~/Desktop/vpn/<public-ip>/`, with a symlink created at `~/Desktop/vpn/<vm-name>`.
+### Inspect an Endpoint
+
+Perform a deep multi-layer diagnostic check to determine why a VPN endpoint is blocked or failing (detecting Azure VM status, operator IP alignment, ICMP reachability, TCP 22 SSH reachability, remote WireGuard daemon status, active peer handshakes, and GFW DPI vs IP null-routing block reasons):
+
+```bash
+vpn inspect usa                         # inspect algo-vpn-usa
+vpn inspect algo-vpn-uk                 # inspect algo-vpn-uk
+./scripts/algo-vpn.sh inspect australia # inspect algo-vpn-australia
+```
 
 ### Replace an Endpoint
 

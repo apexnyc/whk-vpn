@@ -172,13 +172,13 @@ cmd_create() {
   log_info "running unattended install on $vm_ip (this can take 10-20 min)"
   set +e
   local remote_output
-  remote_output="$(ssh -o StrictHostKeyChecking=accept-new "$ADMIN_USER@$vm_ip" '
+  remote_output="$(ssh -o StrictHostKeyChecking=accept-new "$ADMIN_USER@$vm_ip" "ALGO_REPO='$ALGO_REPO' bash -s" <<'EOF'
     set -e
     export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a
     if [ ! -d algo-vpn ]; then
       sudo -E apt-get update
       sudo -E apt-get -y upgrade
-      git clone '"$ALGO_REPO"' algo-vpn
+      git clone "$ALGO_REPO" algo-vpn
       sudo apt install -y --no-install-recommends python3-virtualenv
     fi
     cd algo-vpn
@@ -191,7 +191,8 @@ cmd_create() {
       source .env/bin/activate
     fi
     ./algo
-  ')"
+EOF
+)"
   local ssh_status=$?
   set -e
 

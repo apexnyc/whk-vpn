@@ -4,6 +4,7 @@
 #
 # Usage:
 #   algo-vpn.sh create [uk|australia|usa]   # omit the region to pick interactively
+#   algo-vpn.sh replace [uk|australia|usa]  # tear down existing endpoint (if any) & recreate
 #   algo-vpn.sh list                        # show live Algo VMs in the resource group
 #   algo-vpn.sh destroy <vm-name> [--yes]   # tear down just that VM and its resources
 #
@@ -57,6 +58,7 @@ usage() {
   cat >&2 <<'EOF'
 Usage:
   algo-vpn.sh create [uk|australia|usa]
+  algo-vpn.sh replace [uk|australia|usa]
   algo-vpn.sh list
   algo-vpn.sh destroy <vm-name> [--yes]
 EOF
@@ -279,8 +281,26 @@ cmd_destroy() {
   az vm list -g "$RESOURCE_GROUP" -o table
 }
 
+cmd_replace() {
+  local region="${1:-}"
+  [[ -n "$region" ]] || region="$(prompt_region)"
+  region_to_params "$region"
+
+  require_cmd az; require_az_login
+
+  if az vm show -g "$RESOURCE_GROUP" -n "$VM_NAME" >/dev/null 2>&1; then
+    log_info "destroying existing VM '$VM_NAME' before replacing..."
+    cmd_destroy "$VM_NAME" "--yes"
+  else
+    log_info "no existing VM '$VM_NAME' found -- proceeding with creation"
+  fi
+
+  cmd_create "$region"
+}
+
 case "${1:-}" in
   create)  shift; cmd_create "${1:-}" ;;
+  replace) shift; cmd_replace "${1:-}" ;;
   list)    cmd_list ;;
   destroy) shift; cmd_destroy "${1:-}" "${2:-}" ;;
   *) usage ;;

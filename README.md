@@ -43,6 +43,16 @@ Provision a new VPN endpoint in a specific region (`uk`, `australia`, or `usa`).
 
 Generated client configs land in `~/Desktop/vpn/<public-ip>/`, with a symlink created at `~/Desktop/vpn/<vm-name>`.
 
+### Replace an Endpoint
+
+Non-interactively tear down an existing endpoint in a region (if it exists) and immediately provision a fresh one:
+
+```bash
+./scripts/algo-vpn.sh replace usa         # replaces algo-vpn-usa without confirmation
+./scripts/algo-vpn.sh replace uk
+./scripts/algo-vpn.sh replace australia
+```
+
 ### List Running Endpoints
 
 Display all active VPN virtual machines, their power states, locations, and public IPs in the `kwang-vpn` resource group:

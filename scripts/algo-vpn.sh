@@ -282,6 +282,21 @@ EOF
   echo " IP address: $vm_ip"
   echo " Configs:    $CONFIGS_DIR/$VM_NAME"
   echo "=================================================="
+
+  local ipad_conf=""
+  if [[ -f "$CONFIGS_DIR/$config_dir/wireguard/${vm_ip_prefix}-ipad.conf" ]]; then
+    ipad_conf="$CONFIGS_DIR/$config_dir/wireguard/${vm_ip_prefix}-ipad.conf"
+  elif [[ -f "$CONFIGS_DIR/$config_dir/wireguard/license_1.conf" ]]; then
+    ipad_conf="$CONFIGS_DIR/$config_dir/wireguard/license_1.conf"
+  fi
+
+  if command -v qrencode >/dev/null 2>&1 && [[ -n "${ipad_conf:-}" && -f "$ipad_conf" ]]; then
+    echo
+    echo "=================================================="
+    echo " QR CODE FOR IPAD SCAN (Client Config: $(basename "$ipad_conf")):"
+    echo "=================================================="
+    qrencode -t ansiutf8 < "$ipad_conf"
+  fi
 }
 
 cmd_list() {
@@ -866,12 +881,19 @@ cmd_rotate_ip() {
   echo " Configs updated in: $CONFIGS_DIR/$vm_name"
   echo "=================================================="
 
-  if command -v qrencode >/dev/null 2>&1 && [[ -n "${client_conf:-}" && -f "$client_conf" ]]; then
+  local ipad_conf=""
+  if [[ -f "$target_dir/wireguard/${new_ip}-ipad.conf" ]]; then
+    ipad_conf="$target_dir/wireguard/${new_ip}-ipad.conf"
+  elif [[ -f "$target_dir/wireguard/license_1.conf" ]]; then
+    ipad_conf="$target_dir/wireguard/license_1.conf"
+  fi
+
+  if command -v qrencode >/dev/null 2>&1 && [[ -n "${ipad_conf:-}" && -f "$ipad_conf" ]]; then
     echo
     echo "=================================================="
-    echo " QR CODE FOR IPAD SCAN (Client Config: $(basename "$client_conf")):"
+    echo " QR CODE FOR IPAD SCAN (Client Config: $(basename "$ipad_conf")):"
     echo "=================================================="
-    qrencode -t ansiutf8 < "$client_conf"
+    qrencode -t ansiutf8 < "$ipad_conf"
   fi
 }
 

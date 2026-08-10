@@ -239,48 +239,10 @@ EOF
     osascript -e '
     on run argv
       set confPath to item 1 of argv
-      set tunnelName to item 2 of argv
       tell application "WireGuard" to activate
       delay 0.5
       tell application "System Events"
         tell process "WireGuard"
-          if not (exists window 1) then
-            try
-              perform action "AXPress" of menu bar item 1 of menu bar 2
-            end try
-          end if
-          delay 0.5
-          if exists window 1 then
-            tell window 1
-              set targetRow to null
-              try
-                repeat with r in rows of table 1 of scroll area 1
-                  set found to false
-                  repeat with ch in UI elements of UI element 1 of r
-                    try
-                      if value of ch is tunnelName or title of ch is tunnelName then
-                        set found to true
-                      end if
-                    end try
-                  end repeat
-                  if found then
-                    set targetRow to r
-                    exit repeat
-                  end if
-                end repeat
-                
-                if targetRow is not null then
-                  set selected of targetRow to true
-                  delay 0.3
-                  keystroke (ASCII character 127) using {command down}
-                  delay 0.8
-                  keystroke return
-                  delay 0.8
-                end if
-              end try
-            end tell
-          end if
-          
           keystroke "o" using {command down}
           delay 1.0
           keystroke "g" using {command down, shift down}
@@ -292,7 +254,7 @@ EOF
           keystroke return
         end tell
       end tell
-    end run' "$named_conf" "$VM_NAME" >/dev/null 2>&1 || log_warn "could not auto-import into WireGuard GUI"
+    end run' "$named_conf" >/dev/null 2>&1 || log_warn "could not auto-import into WireGuard GUI"
   fi
 
   echo
@@ -762,48 +724,10 @@ cmd_rotate_ip() {
         osascript -e '
         on run argv
           set confPath to item 1 of argv
-          set tunnelName to item 2 of argv
           tell application "WireGuard" to activate
           delay 0.5
           tell application "System Events"
             tell process "WireGuard"
-              if not (exists window 1) then
-                try
-                  perform action "AXPress" of menu bar item 1 of menu bar 2
-                end try
-              end if
-              delay 0.5
-              if exists window 1 then
-                tell window 1
-                  set targetRow to null
-                  try
-                    repeat with r in rows of table 1 of scroll area 1
-                      set found to false
-                      repeat with ch in UI elements of UI element 1 of r
-                        try
-                          if value of ch is tunnelName or title of ch is tunnelName then
-                            set found to true
-                          end if
-                        end try
-                      end repeat
-                      if found then
-                        set targetRow to r
-                        exit repeat
-                      end if
-                    end repeat
-                    
-                    if targetRow is not null then
-                      set selected of targetRow to true
-                      delay 0.3
-                      keystroke (ASCII character 127) using {command down}
-                      delay 0.8
-                      keystroke return
-                      delay 0.8
-                    end if
-                  end try
-                end tell
-              end if
-              
               keystroke "o" using {command down}
               delay 1.0
               keystroke "g" using {command down, shift down}
@@ -815,7 +739,7 @@ cmd_rotate_ip() {
               keystroke return
             end tell
           end tell
-        end run' "$named_conf" "$vm_name" >/dev/null 2>&1 || log_warn "could not auto-import into WireGuard GUI"
+        end run' "$named_conf" >/dev/null 2>&1 || log_warn "could not auto-import into WireGuard GUI"
       fi
     fi
   fi

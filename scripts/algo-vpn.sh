@@ -220,6 +220,21 @@ EOF
     | tar xzf - -C "$CONFIGS_DIR"
 
   ln -sfn "$config_dir" "$CONFIGS_DIR/$VM_NAME"
+
+  # Convert legacy license_0..6 files to new device names if present
+  if [[ -d "$CONFIGS_DIR/$config_dir/wireguard" ]]; then
+    local devices=("mac" "ipad" "iphone" "windows" "android" "ios" "macmini")
+    for idx in "${!devices[@]}"; do
+      local dev="${devices[$idx]}"
+      local old_base="license_${idx}"
+      find "$CONFIGS_DIR/$config_dir" -type f -name "${old_base}.*" 2>/dev/null | while read -r old_file; do
+        local ext="${old_file##*.}"
+        local new_file="$(dirname "$old_file")/${config_dir}-${dev}.${ext}"
+        mv "$old_file" "$new_file"
+      done
+    done
+  fi
+
   find "$CONFIGS_DIR/$config_dir" -type f | sort
 
   # Automatically import config into WireGuard GUI on macOS if available
@@ -722,6 +737,20 @@ cmd_rotate_ip() {
           local new_file
           new_file="$(dirname "$old_file")/${new_ip}-${fname#${old_ip}-}"
           mv "$old_file" "$new_file"
+        done
+      fi
+
+      # Convert legacy license_0..6 files to new device names if present
+      if [[ -d "$target_dir/wireguard" ]]; then
+        local devices=("mac" "ipad" "iphone" "windows" "android" "ios" "macmini")
+        for idx in "${!devices[@]}"; do
+          local dev="${devices[$idx]}"
+          local old_base="license_${idx}"
+          find "$target_dir" -type f -name "${old_base}.*" 2>/dev/null | while read -r old_file; do
+            local ext="${old_file##*.}"
+            local new_file="$(dirname "$old_file")/${new_ip}-${dev}.${ext}"
+            mv "$old_file" "$new_file"
+          done
         done
       fi
 

@@ -224,7 +224,13 @@ EOF
 
   # Automatically import config into WireGuard GUI on macOS if available
   local client_conf=""
-  if [[ -f "$CONFIGS_DIR/$config_dir/wireguard/license_2.conf" ]]; then
+  local vm_ip_prefix
+  vm_ip_prefix="$(basename "$config_dir")"
+  if [[ -f "$CONFIGS_DIR/$config_dir/wireguard/${vm_ip_prefix}-macmini.conf" ]]; then
+    client_conf="$CONFIGS_DIR/$config_dir/wireguard/${vm_ip_prefix}-macmini.conf"
+  elif [[ -f "$CONFIGS_DIR/$config_dir/wireguard/${vm_ip_prefix}-ipad.conf" ]]; then
+    client_conf="$CONFIGS_DIR/$config_dir/wireguard/${vm_ip_prefix}-ipad.conf"
+  elif [[ -f "$CONFIGS_DIR/$config_dir/wireguard/license_2.conf" ]]; then
     client_conf="$CONFIGS_DIR/$config_dir/wireguard/license_2.conf"
   elif [[ -f "$CONFIGS_DIR/$config_dir/wireguard/license_0.conf" ]]; then
     client_conf="$CONFIGS_DIR/$config_dir/wireguard/license_0.conf"
@@ -698,6 +704,17 @@ cmd_rotate_ip() {
         log_info "renamed config folder to $new_target_dir and updated symlink $CONFIGS_DIR/$vm_name"
       fi
 
+      # Rename files inside target_dir to start with new IP if they started with old IP
+      if [[ -n "${old_ip:-}" && "$old_ip" != "$new_ip" ]]; then
+        find "$target_dir" -type f -name "${old_ip}-*" 2>/dev/null | while read -r old_file; do
+          local fname
+          fname="$(basename "$old_file")"
+          local new_file
+          new_file="$(dirname "$old_file")/${new_ip}-${fname#${old_ip}-}"
+          mv "$old_file" "$new_file"
+        done
+      fi
+
       # Clean up old IP address directories in CONFIGS_DIR that are no longer referenced by any active symlink
       find "$CONFIGS_DIR" -maxdepth 1 -type d 2>/dev/null | while read -r dir; do
         local bname
@@ -721,7 +738,11 @@ cmd_rotate_ip() {
 
       # Auto import into WireGuard GUI on macOS if available
       local client_conf=""
-      if [[ -f "$target_dir/wireguard/license_2.conf" ]]; then
+      if [[ -f "$target_dir/wireguard/${new_ip}-macmini.conf" ]]; then
+        client_conf="$target_dir/wireguard/${new_ip}-macmini.conf"
+      elif [[ -f "$target_dir/wireguard/${new_ip}-ipad.conf" ]]; then
+        client_conf="$target_dir/wireguard/${new_ip}-ipad.conf"
+      elif [[ -f "$target_dir/wireguard/license_2.conf" ]]; then
         client_conf="$target_dir/wireguard/license_2.conf"
       elif [[ -f "$target_dir/wireguard/license_0.conf" ]]; then
         client_conf="$target_dir/wireguard/license_0.conf"

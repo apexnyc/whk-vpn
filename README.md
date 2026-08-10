@@ -51,6 +51,15 @@ vpn inspect algo-vpn-uk                 # inspect algo-vpn-uk
 ./scripts/algo-vpn.sh inspect australia # inspect algo-vpn-australia
 ```
 
+### Rotate Public IP (Fast ~15s IP Swap)
+
+Swap the Azure public IP attached to the VM's network interface without deleting the VM, wiping server storage, or re-running Ansible. The script automatically syncs authentic client configs from the server, updates local `.conf` files in `$HOME/Desktop/vpn/`, regenerates all PNG QR code files, re-imports into WireGuard macOS GUI, and renders a terminal QR code for iPad scanning:
+
+```bash
+vpn rotate-ip usa                         # swaps IP for algo-vpn-usa
+./scripts/algo-vpn.sh rotate-ip uk        # swaps IP for algo-vpn-uk
+```
+
 ### Replace an Endpoint
 
 Non-interactively tear down an existing endpoint in a region (if it exists) and immediately provision a fresh one:

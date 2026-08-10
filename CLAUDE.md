@@ -26,6 +26,9 @@ vpn create usa         # eastus         -> VM algo-vpn-usa
 vpn inspect usa        # or: vpn inspect algo-vpn-usa
 vpn inspect uk
 
+# Fast IP rotation (swap Azure public IP in ~15s without deleting VM or configs)
+vpn rotate-ip usa
+
 # See what's currently running
 vpn list
 

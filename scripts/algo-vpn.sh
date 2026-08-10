@@ -59,6 +59,8 @@ usage() {
 Usage:
   algo-vpn.sh create [uk|australia|usa]
   algo-vpn.sh replace [uk|australia|usa]
+  algo-vpn.sh rotate-ip [uk|australia|usa]
+  algo-vpn.sh inspect [uk|australia|usa]
   algo-vpn.sh list
   algo-vpn.sh destroy <vm-name> [--yes]
 EOF
@@ -526,7 +528,9 @@ EOF
     if [[ -n "$latest_handshakes" ]]; then
       while read -r line; do
         local mins=9999
-        if [[ "$line" =~ ([0-9]+)[[:space:]]*min ]]; then
+        if [[ "$line" =~ hour || "$line" =~ day ]]; then
+          mins=9999
+        elif [[ "$line" =~ ([0-9]+)[[:space:]]*min ]]; then
           mins="${BASH_REMATCH[1]}"
         elif [[ "$line" =~ ([0-9]+)[[:space:]]*sec ]]; then
           mins=0
@@ -581,6 +585,182 @@ EOF
   echo "================================================================================"
 }
 
+cmd_rotate_ip() {
+  local target="${1:-}"
+  require_cmd az; require_cmd curl; require_az_login
+
+  local vm_name="" region=""
+  case "$target" in
+    uk|australia|usa)
+      region="$target"
+      region_to_params "$region"
+      vm_name="$VM_NAME"
+      ;;
+    algo-vpn-uk|algo-vpn-australia|algo-vpn-usa)
+      vm_name="$target"
+      region="${vm_name#algo-vpn-}"
+      region_to_params "$region"
+      ;;
+    "")
+      region="$(prompt_region)"
+      region_to_params "$region"
+      vm_name="$VM_NAME"
+      ;;
+    *)
+      vm_name="$target"
+      region="${vm_name#algo-vpn-}"
+      region_to_params "$region"
+      ;;
+  esac
+
+  log_info "starting fast public IP rotation for '$vm_name'..."
+
+  local vm_json
+  vm_json="$(az vm show -d -g "$RESOURCE_GROUP" -n "$vm_name" -o json 2>/dev/null || true)"
+  [[ -n "$vm_json" ]] || die "VM '$vm_name' not found in resource group '$RESOURCE_GROUP'"
+
+  local old_ip nic_name ip_config_name
+  old_ip="$(printf '%s' "$vm_json" | jq -r '.publicIps // empty' 2>/dev/null || true)"
+
+  nic_name="$(az network nic list -g "$RESOURCE_GROUP" --query "[?contains(name, '$vm_name')].name | [0]" -o tsv)"
+  [[ -n "$nic_name" ]] || die "could not find NIC for $vm_name"
+
+  ip_config_name="$(az network nic show -g "$RESOURCE_GROUP" -n "$nic_name" --query "ipConfigurations[0].name" -o tsv)"
+  [[ -n "$ip_config_name" ]] || die "could not find IP config for NIC $nic_name"
+
+  local old_pip_name
+  old_pip_name="$(az network public-ip list -g "$RESOURCE_GROUP" --query "[?contains(name, '$vm_name')].name | [0]" -o tsv)"
+
+  local timestamp
+  timestamp="$(date +%s)"
+  local new_pip_name="${vm_name}PublicIP-${timestamp}"
+
+  log_info "creating new Azure Public IP '$new_pip_name' in $LOCATION..."
+  az network public-ip create \
+    -g "$RESOURCE_GROUP" \
+    -n "$new_pip_name" \
+    -l "$LOCATION" \
+    --sku Standard \
+    --allocation-method Static \
+    -o none
+
+  log_info "attaching new Public IP to NIC '$nic_name'..."
+  az network nic ip-config update \
+    -g "$RESOURCE_GROUP" \
+    --nic-name "$nic_name" \
+    -n "$ip_config_name" \
+    --public-ip-address "$new_pip_name" \
+    -o none
+
+  local new_ip
+  new_ip="$(az network public-ip show -g "$RESOURCE_GROUP" -n "$new_pip_name" --query ipAddress -o tsv)"
+  [[ -n "$new_ip" ]] || die "failed to resolve new Public IP"
+
+  log_info "VM new Public IP is $new_ip (was ${old_ip:-unknown})"
+
+  if [[ -n "$old_pip_name" && "$old_pip_name" != "$new_pip_name" ]]; then
+    log_info "deleting old Public IP '$old_pip_name'..."
+    az network public-ip delete -g "$RESOURCE_GROUP" -n "$old_pip_name" -o none || log_warn "could not delete old Public IP $old_pip_name"
+  fi
+
+  # Update local config files in ~/Desktop/vpn/ and ~/Desktop/vpn/$vm_name/
+  if [[ -d "$CONFIGS_DIR" ]]; then
+    local target_dir=""
+    if [[ -L "$CONFIGS_DIR/$vm_name" ]]; then
+      target_dir="$CONFIGS_DIR/$(readlink "$CONFIGS_DIR/$vm_name")"
+    elif [[ -d "$CONFIGS_DIR/$vm_name" ]]; then
+      target_dir="$CONFIGS_DIR/$vm_name"
+    fi
+
+    # Check if remote SSH is reachable to sync real configs if missing/stale
+    if ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 -o BatchMode=yes "$ADMIN_USER@$new_ip" "test -d /home/$ADMIN_USER/algo-vpn/configs" 2>/dev/null; then
+      local remote_cfg_dir
+      remote_cfg_dir="$(ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 "$ADMIN_USER@$new_ip" "find /home/$ADMIN_USER/algo-vpn/configs -maxdepth 1 -type d ! -path '*/configs' | head -n 1" 2>/dev/null || true)"
+      if [[ -n "$remote_cfg_dir" ]]; then
+        target_dir="$CONFIGS_DIR/$new_ip"
+        mkdir -p "$target_dir"
+        log_info "syncing authentic client configs from remote VM ($remote_cfg_dir)..."
+        ssh -o StrictHostKeyChecking=accept-new "$ADMIN_USER@$new_ip" "cd '$remote_cfg_dir' && tar czf - ." | tar xzf - -C "$target_dir"
+        ln -sfn "$new_ip" "$CONFIGS_DIR/$vm_name"
+      fi
+    fi
+
+    if [[ -n "$target_dir" && -d "$target_dir" ]]; then
+      log_info "updating local WireGuard configs in $target_dir with new endpoint IP $new_ip..."
+      find "$target_dir" -type f -name "*.conf" -exec sed -i '' -E "s/Endpoint = [0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:/Endpoint = ${new_ip}:/g" {} +
+
+      # Rename directory to new IP if target_dir is named as an old IP
+      if [[ "$(basename "$target_dir")" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ && "$(basename "$target_dir")" != "$new_ip" ]]; then
+        local new_target_dir="$CONFIGS_DIR/$new_ip"
+        mv "$target_dir" "$new_target_dir"
+        target_dir="$new_target_dir"
+        ln -sfn "$new_ip" "$CONFIGS_DIR/$vm_name"
+        log_info "renamed config folder to $new_target_dir and updated symlink $CONFIGS_DIR/$vm_name"
+      fi
+
+      # If qrencode is available, regenerate all QR code PNG images
+      if command -v qrencode >/dev/null 2>&1; then
+        log_info "regenerating QR code PNG images in $target_dir/wireguard..."
+        find "$target_dir/wireguard" -name "*.conf" 2>/dev/null | while read -r conf_file; do
+          png_file="${conf_file%.conf}.png"
+          qrencode -o "$png_file" < "$conf_file" 2>/dev/null || true
+        done
+      fi
+
+      # Auto import into WireGuard GUI on macOS if available
+      local client_conf=""
+      if [[ -f "$target_dir/wireguard/license_2.conf" ]]; then
+        client_conf="$target_dir/wireguard/license_2.conf"
+      elif [[ -f "$target_dir/wireguard/license_0.conf" ]]; then
+        client_conf="$target_dir/wireguard/license_0.conf"
+      else
+        client_conf="$(find "$target_dir/wireguard" -name "*.conf" 2>/dev/null | head -n 1)"
+      fi
+
+      if [[ -n "$client_conf" && -d "/Applications/WireGuard.app" ]]; then
+        local named_conf="$target_dir/$vm_name.conf"
+        cp "$client_conf" "$named_conf"
+        log_info "re-importing $vm_name into WireGuard GUI with new IP..."
+        osascript -e '
+        on run argv
+          set confPath to item 1 of argv
+          tell application "WireGuard" to activate
+          delay 0.5
+          tell application "System Events"
+            tell process "WireGuard"
+              keystroke "o" using {command down}
+              delay 1.0
+              keystroke "g" using {command down, shift down}
+              delay 1.0
+              keystroke confPath
+              delay 0.5
+              keystroke return
+              delay 0.8
+              keystroke return
+            end tell
+          end tell
+        end run' "$named_conf" >/dev/null 2>&1 || log_warn "could not auto-import into WireGuard GUI"
+      fi
+    fi
+  fi
+
+  echo
+  echo "=================================================="
+  echo " IP Rotation Complete for: $vm_name"
+  echo " Old IP: ${old_ip:-unknown}"
+  echo " New IP: $new_ip"
+  echo " Configs updated in: $CONFIGS_DIR/$vm_name"
+  echo "=================================================="
+
+  if command -v qrencode >/dev/null 2>&1 && [[ -n "${client_conf:-}" && -f "$client_conf" ]]; then
+    echo
+    echo "=================================================="
+    echo " QR CODE FOR IPAD SCAN (Client Config: $(basename "$client_conf")):"
+    echo "=================================================="
+    qrencode -t ansiutf8 < "$client_conf"
+  fi
+}
+
 cmd_replace() {
   local region="${1:-}"
   [[ -n "$region" ]] || region="$(prompt_region)"
@@ -605,6 +785,7 @@ fi
 case "${1:-}" in
   create)             shift; cmd_create "${1:-}" ;;
   replace)            shift; cmd_replace "${1:-}" ;;
+  rotate-ip|rotate)   shift; cmd_rotate_ip "${1:-}" ;;
   inspect|inspection) shift; cmd_inspect "${1:-}" ;;
   list)               cmd_list ;;
   destroy)            shift; cmd_destroy "${1:-}" "${2:-}" ;;

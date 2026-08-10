@@ -90,6 +90,129 @@ prompt_region() {
   esac
 }
 
+convert_legacy_license_files() {
+  local target_dir="$1"
+  local ip_prefix="$2"
+  [[ -d "$target_dir/wireguard" ]] || return 0
+  local devices=("mac" "ipad" "iphone" "windows" "android" "ios" "macmini")
+  for idx in "${!devices[@]}"; do
+    local dev="${devices[$idx]}"
+    local old_base="license_${idx}"
+    find "$target_dir" -type f -name "${old_base}.*" 2>/dev/null | while read -r old_file; do
+      local ext="${old_file##*.}"
+      local new_file="$(dirname "$old_file")/${ip_prefix}-${dev}.${ext}"
+      mv "$old_file" "$new_file"
+    done
+  done
+}
+
+select_mac_client_conf() {
+  local target_dir="$1"
+  local ip_prefix="$2"
+  if [[ -f "$target_dir/wireguard/${ip_prefix}-mac.conf" ]]; then
+    echo "$target_dir/wireguard/${ip_prefix}-mac.conf"
+  elif [[ -f "$target_dir/wireguard/${ip_prefix}-macmini.conf" ]]; then
+    echo "$target_dir/wireguard/${ip_prefix}-macmini.conf"
+  elif [[ -f "$target_dir/wireguard/license_2.conf" ]]; then
+    echo "$target_dir/wireguard/license_2.conf"
+  elif [[ -f "$target_dir/wireguard/license_0.conf" ]]; then
+    echo "$target_dir/wireguard/license_0.conf"
+  else
+    find "$target_dir/wireguard" -name "*.conf" 2>/dev/null | head -n 1
+  fi
+}
+
+import_wireguard_gui() {
+  local client_conf="$1"
+  local vm_name="$2"
+  local old_ip="${3:-}"
+
+  [[ -n "$client_conf" && -f "$client_conf" && -d "/Applications/WireGuard.app" ]] || return 0
+  local new_tunnel_name
+  new_tunnel_name="$(basename "${client_conf%.conf}")"
+  log_info "importing $new_tunnel_name into WireGuard GUI..."
+  osascript -e '
+  on run argv
+    set confPath to item 1 of argv
+    set newTunnelName to item 2 of argv
+    set oldIp to item 3 of argv
+    set vmName to item 4 of argv
+    tell application "WireGuard" to activate
+    delay 0.5
+    tell application "System Events"
+      tell process "WireGuard"
+        if not (exists window 1) then
+          try
+            perform action "AXPress" of menu bar item 1 of menu bar 2
+          end try
+        end if
+        delay 0.5
+        if exists window 1 then
+          tell window 1
+            keystroke "o" using {command down}
+            delay 1.0
+            keystroke "g" using {command down, shift down}
+            delay 1.0
+            keystroke confPath
+            delay 0.5
+            keystroke return
+            delay 0.8
+            keystroke return
+            delay 1.0
+            
+            try
+              repeat with r in rows of table 1 of scroll area 1
+                set tName to ""
+                repeat with ch in UI elements of UI element 1 of r
+                  try
+                    if (get value of ch) is not missing value then set tName to (get value of ch)
+                  end try
+                  try
+                    if (get title of ch) is not missing value then set tName to (get title of ch)
+                  end try
+                end repeat
+                
+                if tName is not "" and tName is not newTunnelName then
+                  if (oldIp is not "" and tName contains oldIp) or tName is vmName then
+                    set selected of r to true
+                    delay 0.3
+                    click (first UI element whose description is "remove" or name is "remove")
+                    delay 0.8
+                    if exists sheet 1 then
+                      click button "Delete" of sheet 1
+                      delay 0.8
+                    end if
+                    exit repeat
+                  end if
+                end if
+              end repeat
+            end try
+          end tell
+        end if
+      end tell
+    end tell
+  end run' "$client_conf" "$new_tunnel_name" "$old_ip" "$vm_name" >/dev/null 2>&1 || log_warn "could not auto-import into WireGuard GUI"
+}
+
+render_ipad_qr_code() {
+  local target_dir="$1"
+  local ip_prefix="$2"
+  local ipad_conf=""
+  if [[ -f "$target_dir/wireguard/${ip_prefix}-ipad.conf" ]]; then
+    ipad_conf="$target_dir/wireguard/${ip_prefix}-ipad.conf"
+  elif [[ -f "$target_dir/wireguard/license_1.conf" ]]; then
+    ipad_conf="$target_dir/wireguard/license_1.conf"
+  fi
+
+  if command -v qrencode >/dev/null 2>&1 && [[ -n "${ipad_conf:-}" && -f "$ipad_conf" ]]; then
+    echo
+    echo "=================================================="
+    echo " QR CODE FOR IPAD SCAN (Client Config: $(basename "$ipad_conf")):"
+    echo "=================================================="
+    qrencode -t ansiutf8 < "$ipad_conf"
+  fi
+}
+
 cmd_create() {
   local region="${1:-}"
   [[ -n "$region" ]] || region="$(prompt_region)"
@@ -105,8 +228,6 @@ cmd_create() {
   log_info "ensuring resource group '$RESOURCE_GROUP' exists in $LOCATION"
   az group create -n "$RESOURCE_GROUP" -l "$LOCATION" --tags managed-by=whk-vpn -o none
 
-  # Azure gates disabling Trusted Launch (security-type Standard) behind a
-  # subscription-level feature flag. One-time and idempotent; skip once set.
   local feature_state
   feature_state="$(az feature show --namespace Microsoft.Compute --name UseStandardSecurityType --query "properties.state" -o tsv 2>/dev/null || true)"
   if [[ "$feature_state" != "Registered" ]]; then
@@ -220,61 +341,12 @@ EOF
     | tar xzf - -C "$CONFIGS_DIR"
 
   ln -sfn "$config_dir" "$CONFIGS_DIR/$VM_NAME"
-
-  # Convert legacy license_0..6 files to new device names if present
-  if [[ -d "$CONFIGS_DIR/$config_dir/wireguard" ]]; then
-    local devices=("mac" "ipad" "iphone" "windows" "android" "ios" "macmini")
-    for idx in "${!devices[@]}"; do
-      local dev="${devices[$idx]}"
-      local old_base="license_${idx}"
-      find "$CONFIGS_DIR/$config_dir" -type f -name "${old_base}.*" 2>/dev/null | while read -r old_file; do
-        local ext="${old_file##*.}"
-        local new_file="$(dirname "$old_file")/${config_dir}-${dev}.${ext}"
-        mv "$old_file" "$new_file"
-      done
-    done
-  fi
-
+  convert_legacy_license_files "$CONFIGS_DIR/$config_dir" "$config_dir"
   find "$CONFIGS_DIR/$config_dir" -type f | sort
 
-  # Automatically import config into WireGuard GUI on macOS if available
-  local client_conf=""
-  local vm_ip_prefix
-  vm_ip_prefix="$(basename "$config_dir")"
-  if [[ -f "$CONFIGS_DIR/$config_dir/wireguard/${vm_ip_prefix}-mac.conf" ]]; then
-    client_conf="$CONFIGS_DIR/$config_dir/wireguard/${vm_ip_prefix}-mac.conf"
-  elif [[ -f "$CONFIGS_DIR/$config_dir/wireguard/${vm_ip_prefix}-macmini.conf" ]]; then
-    client_conf="$CONFIGS_DIR/$config_dir/wireguard/${vm_ip_prefix}-macmini.conf"
-  elif [[ -f "$CONFIGS_DIR/$config_dir/wireguard/license_2.conf" ]]; then
-    client_conf="$CONFIGS_DIR/$config_dir/wireguard/license_2.conf"
-  elif [[ -f "$CONFIGS_DIR/$config_dir/wireguard/license_0.conf" ]]; then
-    client_conf="$CONFIGS_DIR/$config_dir/wireguard/license_0.conf"
-  else
-    client_conf="$(find "$CONFIGS_DIR/$config_dir/wireguard" -name "*.conf" 2>/dev/null | head -n 1)"
-  fi
-
-  if [[ -n "$client_conf" && -d "/Applications/WireGuard.app" ]]; then
-    log_info "importing $(basename "$client_conf") into WireGuard GUI..."
-    osascript -e '
-    on run argv
-      set confPath to item 1 of argv
-      tell application "WireGuard" to activate
-      delay 0.5
-      tell application "System Events"
-        tell process "WireGuard"
-          keystroke "o" using {command down}
-          delay 1.0
-          keystroke "g" using {command down, shift down}
-          delay 1.0
-          keystroke confPath
-          delay 0.5
-          keystroke return
-          delay 0.8
-          keystroke return
-        end tell
-      end tell
-    end run' "$client_conf" >/dev/null 2>&1 || log_warn "could not auto-import into WireGuard GUI"
-  fi
+  local client_conf
+  client_conf="$(select_mac_client_conf "$CONFIGS_DIR/$config_dir" "$config_dir")"
+  import_wireguard_gui "$client_conf" "$VM_NAME" ""
 
   echo
   echo "=================================================="
@@ -283,20 +355,7 @@ EOF
   echo " Configs:    $CONFIGS_DIR/$VM_NAME"
   echo "=================================================="
 
-  local ipad_conf=""
-  if [[ -f "$CONFIGS_DIR/$config_dir/wireguard/${vm_ip_prefix}-ipad.conf" ]]; then
-    ipad_conf="$CONFIGS_DIR/$config_dir/wireguard/${vm_ip_prefix}-ipad.conf"
-  elif [[ -f "$CONFIGS_DIR/$config_dir/wireguard/license_1.conf" ]]; then
-    ipad_conf="$CONFIGS_DIR/$config_dir/wireguard/license_1.conf"
-  fi
-
-  if command -v qrencode >/dev/null 2>&1 && [[ -n "${ipad_conf:-}" && -f "$ipad_conf" ]]; then
-    echo
-    echo "=================================================="
-    echo " QR CODE FOR IPAD SCAN (Client Config: $(basename "$ipad_conf")):"
-    echo "=================================================="
-    qrencode -t ansiutf8 < "$ipad_conf"
-  fi
+  render_ipad_qr_code "$CONFIGS_DIR/$config_dir" "$config_dir"
 }
 
 cmd_list() {
@@ -339,14 +398,7 @@ cmd_destroy() {
   [[ -n "$nsg_name" ]] && az network nsg delete -g "$RESOURCE_GROUP" -n "$nsg_name" -o none
   [[ -n "$disk_name" ]] && az disk delete -g "$RESOURCE_GROUP" -n "$disk_name" --yes -o none
 
-  # Drop the local friendly symlink and downloaded configs for this VM, if any.
-  if [[ -L "$CONFIGS_DIR/$vm_name" ]]; then
-    local target
-    target="$(readlink "$CONFIGS_DIR/$vm_name")"
-    rm -f "$CONFIGS_DIR/$vm_name"
-    rm -rf "${CONFIGS_DIR:?}/$target"
-    log_info "removed local configs for $vm_name ($target)"
-  fi
+  cleanup_configs "$vm_name"
 
   log_info "done. remaining VMs in '$RESOURCE_GROUP':"
   az vm list -g "$RESOURCE_GROUP" -o table
@@ -755,19 +807,7 @@ cmd_rotate_ip() {
         done
       fi
 
-      # Convert legacy license_0..6 files to new device names if present
-      if [[ -d "$target_dir/wireguard" ]]; then
-        local devices=("mac" "ipad" "iphone" "windows" "android" "ios" "macmini")
-        for idx in "${!devices[@]}"; do
-          local dev="${devices[$idx]}"
-          local old_base="license_${idx}"
-          find "$target_dir" -type f -name "${old_base}.*" 2>/dev/null | while read -r old_file; do
-            local ext="${old_file##*.}"
-            local new_file="$(dirname "$old_file")/${new_ip}-${dev}.${ext}"
-            mv "$old_file" "$new_file"
-          done
-        done
-      fi
+      convert_legacy_license_files "$target_dir" "$new_ip"
 
       # Clean up old IP address directories in CONFIGS_DIR that are no longer referenced by any active symlink
       find "$CONFIGS_DIR" -maxdepth 1 -type d 2>/dev/null | while read -r dir; do
@@ -790,86 +830,9 @@ cmd_rotate_ip() {
         done
       fi
 
-      # Auto import into WireGuard GUI on macOS if available
-      local client_conf=""
-      if [[ -f "$target_dir/wireguard/${new_ip}-mac.conf" ]]; then
-        client_conf="$target_dir/wireguard/${new_ip}-mac.conf"
-      elif [[ -f "$target_dir/wireguard/${new_ip}-macmini.conf" ]]; then
-        client_conf="$target_dir/wireguard/${new_ip}-macmini.conf"
-      elif [[ -f "$target_dir/wireguard/license_2.conf" ]]; then
-        client_conf="$target_dir/wireguard/license_2.conf"
-      elif [[ -f "$target_dir/wireguard/license_0.conf" ]]; then
-        client_conf="$target_dir/wireguard/license_0.conf"
-      else
-        client_conf="$(find "$target_dir/wireguard" -name "*.conf" 2>/dev/null | head -n 1)"
-      fi
-
-      if [[ -n "$client_conf" && -d "/Applications/WireGuard.app" ]]; then
-        local new_tunnel_name
-        new_tunnel_name="$(basename "${client_conf%.conf}")"
-        log_info "re-importing $new_tunnel_name into WireGuard GUI and removing old tunnel..."
-        osascript -e '
-        on run argv
-          set confPath to item 1 of argv
-          set newTunnelName to item 2 of argv
-          set oldIp to item 3 of argv
-          set vmName to item 4 of argv
-          tell application "WireGuard" to activate
-          delay 0.5
-          tell application "System Events"
-            tell process "WireGuard"
-              if not (exists window 1) then
-                try
-                  perform action "AXPress" of menu bar item 1 of menu bar 2
-                end try
-              end if
-              delay 0.5
-              if exists window 1 then
-                tell window 1
-                  keystroke "o" using {command down}
-                  delay 1.0
-                  keystroke "g" using {command down, shift down}
-                  delay 1.0
-                  keystroke confPath
-                  delay 0.5
-                  keystroke return
-                  delay 0.8
-                  keystroke return
-                  delay 1.0
-                  
-                  try
-                    repeat with r in rows of table 1 of scroll area 1
-                      set tName to ""
-                      repeat with ch in UI elements of UI element 1 of r
-                        try
-                          if (get value of ch) is not missing value then set tName to (get value of ch)
-                        end try
-                        try
-                          if (get title of ch) is not missing value then set tName to (get title of ch)
-                        end try
-                      end repeat
-                      
-                      if tName is not "" and tName is not newTunnelName then
-                        if (oldIp is not "" and tName contains oldIp) or tName is vmName then
-                          set selected of r to true
-                          delay 0.3
-                          click (first UI element whose description is "remove" or name is "remove")
-                          delay 0.8
-                          if exists sheet 1 then
-                            click button "Delete" of sheet 1
-                            delay 0.8
-                          end if
-                          exit repeat
-                        end if
-                      end if
-                    end repeat
-                  end try
-                end tell
-              end if
-            end tell
-          end tell
-        end run' "$client_conf" "$new_tunnel_name" "${old_ip:-}" "$vm_name" >/dev/null 2>&1 || log_warn "could not auto-import into WireGuard GUI"
-      fi
+      local client_conf
+      client_conf="$(select_mac_client_conf "$target_dir" "$new_ip")"
+      import_wireguard_gui "$client_conf" "$vm_name" "${old_ip:-}"
     fi
   fi
 
@@ -881,20 +844,7 @@ cmd_rotate_ip() {
   echo " Configs updated in: $CONFIGS_DIR/$vm_name"
   echo "=================================================="
 
-  local ipad_conf=""
-  if [[ -f "$target_dir/wireguard/${new_ip}-ipad.conf" ]]; then
-    ipad_conf="$target_dir/wireguard/${new_ip}-ipad.conf"
-  elif [[ -f "$target_dir/wireguard/license_1.conf" ]]; then
-    ipad_conf="$target_dir/wireguard/license_1.conf"
-  fi
-
-  if command -v qrencode >/dev/null 2>&1 && [[ -n "${ipad_conf:-}" && -f "$ipad_conf" ]]; then
-    echo
-    echo "=================================================="
-    echo " QR CODE FOR IPAD SCAN (Client Config: $(basename "$ipad_conf")):"
-    echo "=================================================="
-    qrencode -t ansiutf8 < "$ipad_conf"
-  fi
+  render_ipad_qr_code "$target_dir" "$new_ip"
 }
 
 cmd_replace() {

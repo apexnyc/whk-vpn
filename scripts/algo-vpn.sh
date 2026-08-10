@@ -698,6 +698,18 @@ cmd_rotate_ip() {
         log_info "renamed config folder to $new_target_dir and updated symlink $CONFIGS_DIR/$vm_name"
       fi
 
+      # Clean up old IP address directories in CONFIGS_DIR that are no longer referenced by any active symlink
+      find "$CONFIGS_DIR" -maxdepth 1 -type d 2>/dev/null | while read -r dir; do
+        local bname
+        bname="$(basename "$dir")"
+        if [[ "$bname" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ && "$bname" != "$new_ip" ]]; then
+          if ! find "$CONFIGS_DIR" -maxdepth 1 -type l -exec readlink {} + 2>/dev/null | grep -q "$bname"; then
+            rm -rf "$dir"
+            log_info "cleaned up old IP config directory $dir"
+          fi
+        fi
+      done
+
       # If qrencode is available, regenerate all QR code PNG images
       if command -v qrencode >/dev/null 2>&1; then
         log_info "regenerating QR code PNG images in $target_dir/wireguard..."

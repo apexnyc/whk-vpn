@@ -255,15 +255,18 @@ EOF
               set targetRow to null
               try
                 repeat with r in rows of table 1 of scroll area 1
+                  set found to false
                   repeat with ch in UI elements of UI element 1 of r
                     try
-                      if title of ch is tunnelName then
-                        set targetRow to r
-                        exit repeat
+                      if value of ch is tunnelName or title of ch is tunnelName then
+                        set found to true
                       end if
                     end try
                   end repeat
-                  if targetRow is not null then exit repeat
+                  if found then
+                    set targetRow to r
+                    exit repeat
+                  end if
                 end repeat
                 
                 if targetRow is not null then
@@ -775,15 +778,18 @@ cmd_rotate_ip() {
                   set targetRow to null
                   try
                     repeat with r in rows of table 1 of scroll area 1
+                      set found to false
                       repeat with ch in UI elements of UI element 1 of r
                         try
-                          if title of ch is tunnelName then
-                            set targetRow to r
-                            exit repeat
+                          if value of ch is tunnelName or title of ch is tunnelName then
+                            set found to true
                           end if
                         end try
                       end repeat
-                      if targetRow is not null then exit repeat
+                      if found then
+                        set targetRow to r
+                        exit repeat
+                      end if
                     end repeat
                     
                     if targetRow is not null then

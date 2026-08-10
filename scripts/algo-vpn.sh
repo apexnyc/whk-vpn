@@ -226,10 +226,10 @@ EOF
   local client_conf=""
   local vm_ip_prefix
   vm_ip_prefix="$(basename "$config_dir")"
-  if [[ -f "$CONFIGS_DIR/$config_dir/wireguard/${vm_ip_prefix}-macmini.conf" ]]; then
+  if [[ -f "$CONFIGS_DIR/$config_dir/wireguard/${vm_ip_prefix}-mac.conf" ]]; then
+    client_conf="$CONFIGS_DIR/$config_dir/wireguard/${vm_ip_prefix}-mac.conf"
+  elif [[ -f "$CONFIGS_DIR/$config_dir/wireguard/${vm_ip_prefix}-macmini.conf" ]]; then
     client_conf="$CONFIGS_DIR/$config_dir/wireguard/${vm_ip_prefix}-macmini.conf"
-  elif [[ -f "$CONFIGS_DIR/$config_dir/wireguard/${vm_ip_prefix}-ipad.conf" ]]; then
-    client_conf="$CONFIGS_DIR/$config_dir/wireguard/${vm_ip_prefix}-ipad.conf"
   elif [[ -f "$CONFIGS_DIR/$config_dir/wireguard/license_2.conf" ]]; then
     client_conf="$CONFIGS_DIR/$config_dir/wireguard/license_2.conf"
   elif [[ -f "$CONFIGS_DIR/$config_dir/wireguard/license_0.conf" ]]; then
@@ -239,9 +239,7 @@ EOF
   fi
 
   if [[ -n "$client_conf" && -d "/Applications/WireGuard.app" ]]; then
-    local named_conf="$CONFIGS_DIR/$config_dir/$VM_NAME.conf"
-    cp "$client_conf" "$named_conf"
-    log_info "importing $VM_NAME into WireGuard GUI..."
+    log_info "importing $(basename "$client_conf") into WireGuard GUI..."
     osascript -e '
     on run argv
       set confPath to item 1 of argv
@@ -260,7 +258,7 @@ EOF
           keystroke return
         end tell
       end tell
-    end run' "$named_conf" >/dev/null 2>&1 || log_warn "could not auto-import into WireGuard GUI"
+    end run' "$client_conf" >/dev/null 2>&1 || log_warn "could not auto-import into WireGuard GUI"
   fi
 
   echo
@@ -750,10 +748,10 @@ cmd_rotate_ip() {
 
       # Auto import into WireGuard GUI on macOS if available
       local client_conf=""
-      if [[ -f "$target_dir/wireguard/${new_ip}-macmini.conf" ]]; then
+      if [[ -f "$target_dir/wireguard/${new_ip}-mac.conf" ]]; then
+        client_conf="$target_dir/wireguard/${new_ip}-mac.conf"
+      elif [[ -f "$target_dir/wireguard/${new_ip}-macmini.conf" ]]; then
         client_conf="$target_dir/wireguard/${new_ip}-macmini.conf"
-      elif [[ -f "$target_dir/wireguard/${new_ip}-ipad.conf" ]]; then
-        client_conf="$target_dir/wireguard/${new_ip}-ipad.conf"
       elif [[ -f "$target_dir/wireguard/license_2.conf" ]]; then
         client_conf="$target_dir/wireguard/license_2.conf"
       elif [[ -f "$target_dir/wireguard/license_0.conf" ]]; then
@@ -763,9 +761,7 @@ cmd_rotate_ip() {
       fi
 
       if [[ -n "$client_conf" && -d "/Applications/WireGuard.app" ]]; then
-        local named_conf="$target_dir/$vm_name.conf"
-        cp "$client_conf" "$named_conf"
-        log_info "re-importing $vm_name into WireGuard GUI with new IP..."
+        log_info "re-importing $(basename "$client_conf") into WireGuard GUI with new IP..."
         osascript -e '
         on run argv
           set confPath to item 1 of argv
@@ -784,7 +780,7 @@ cmd_rotate_ip() {
               keystroke return
             end tell
           end tell
-        end run' "$named_conf" >/dev/null 2>&1 || log_warn "could not auto-import into WireGuard GUI"
+        end run' "$client_conf" >/dev/null 2>&1 || log_warn "could not auto-import into WireGuard GUI"
       fi
     fi
   fi

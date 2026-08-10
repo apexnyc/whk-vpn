@@ -790,26 +790,70 @@ cmd_rotate_ip() {
       fi
 
       if [[ -n "$client_conf" && -d "/Applications/WireGuard.app" ]]; then
-        log_info "re-importing $(basename "$client_conf") into WireGuard GUI with new IP..."
+        local new_tunnel_name
+        new_tunnel_name="$(basename "${client_conf%.conf}")"
+        log_info "re-importing $new_tunnel_name into WireGuard GUI and removing old tunnel..."
         osascript -e '
         on run argv
           set confPath to item 1 of argv
+          set newTunnelName to item 2 of argv
+          set oldIp to item 3 of argv
+          set vmName to item 4 of argv
           tell application "WireGuard" to activate
           delay 0.5
           tell application "System Events"
             tell process "WireGuard"
-              keystroke "o" using {command down}
-              delay 1.0
-              keystroke "g" using {command down, shift down}
-              delay 1.0
-              keystroke confPath
+              if not (exists window 1) then
+                try
+                  perform action "AXPress" of menu bar item 1 of menu bar 2
+                end try
+              end if
               delay 0.5
-              keystroke return
-              delay 0.8
-              keystroke return
+              if exists window 1 then
+                tell window 1
+                  keystroke "o" using {command down}
+                  delay 1.0
+                  keystroke "g" using {command down, shift down}
+                  delay 1.0
+                  keystroke confPath
+                  delay 0.5
+                  keystroke return
+                  delay 0.8
+                  keystroke return
+                  delay 1.0
+                  
+                  try
+                    repeat with r in rows of table 1 of scroll area 1
+                      set tName to ""
+                      repeat with ch in UI elements of UI element 1 of r
+                        try
+                          if (get value of ch) is not missing value then set tName to (get value of ch)
+                        end try
+                        try
+                          if (get title of ch) is not missing value then set tName to (get title of ch)
+                        end try
+                      end repeat
+                      
+                      if tName is not "" and tName is not newTunnelName then
+                        if (oldIp is not "" and tName contains oldIp) or tName is vmName then
+                          set selected of r to true
+                          delay 0.3
+                          click (first UI element whose description is "remove" or name is "remove")
+                          delay 0.8
+                          if exists sheet 1 then
+                            click button "Delete" of sheet 1
+                            delay 0.8
+                          end if
+                          exit repeat
+                        end if
+                      end if
+                    end repeat
+                  end try
+                end tell
+              end if
             end tell
           end tell
-        end run' "$client_conf" >/dev/null 2>&1 || log_warn "could not auto-import into WireGuard GUI"
+        end run' "$client_conf" "$new_tunnel_name" "${old_ip:-}" "$vm_name" >/dev/null 2>&1 || log_warn "could not auto-import into WireGuard GUI"
       fi
     fi
   fi

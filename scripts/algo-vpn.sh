@@ -60,6 +60,7 @@ Usage:
   algo-vpn.sh create [uk|australia|usa]
   algo-vpn.sh replace [uk|australia|usa]
   algo-vpn.sh rotate-ip [uk|australia|usa]
+  algo-vpn.sh update-configs [uk|australia|usa|<ip>]
   algo-vpn.sh inspect [uk|australia|usa]
   algo-vpn.sh list
   algo-vpn.sh destroy <vm-name> [--yes]
@@ -211,6 +212,170 @@ render_ipad_qr_code() {
     echo "=================================================="
     qrencode -t ansiutf8 < "$ipad_conf"
   fi
+}
+
+update_config_folder_ip() {
+  local target_dir="$1"
+  local new_ip="$2"
+  local old_ip="${3:-}"
+
+  [[ -d "$target_dir" ]] || return 0
+  log_info "updating local configs and regenerating QR codes in $target_dir for IP $new_ip..."
+
+  local old_ips=()
+  if [[ -n "$old_ip" ]]; then
+    old_ips+=("$old_ip")
+  fi
+
+  # Detect any old IPv4 addresses in text files inside target_dir that aren't private/DNS IPs
+  while read -r detected_ip; do
+    if [[ -n "$detected_ip" && "$detected_ip" != "$new_ip" ]]; then
+      local already_in=false
+      if [[ ${#old_ips[@]} -gt 0 ]]; then
+        for existing in "${old_ips[@]}"; do
+          if [[ "$existing" == "$detected_ip" ]]; then
+            already_in=true
+            break
+          fi
+        done
+      fi
+      if ! $already_in; then
+        old_ips+=("$detected_ip")
+      fi
+    fi
+  done < <(grep -rE -o '([0-9]{1,3}\.){3}[0-9]{1,3}' "$target_dir" 2>/dev/null \
+    | grep -v -E ':(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|127\.|0\.0\.0\.0|1\.1\.1\.1|8\.8\.8\.8|8\.8\.4\.4)' \
+    | cut -d: -f2 | sort -u || true)
+
+  # Update all text files with new IP for each detected old IP
+  if [[ ${#old_ips[@]} -gt 0 ]]; then
+    for oip in "${old_ips[@]}"; do
+      log_info "replacing old IP reference $oip -> $new_ip in $target_dir"
+      find "$target_dir" -type f \( -name "*.conf" -o -name "*.mobileconfig" -o -name "*.secrets" -o -name "*.yml" -o -name "*.sswan" -o -name "index.txt" \) \
+        -exec sed -i '' "s/${oip}/${new_ip}/g" {} + 2>/dev/null || true
+
+      # Rename files/directories containing old IP in their filename
+      find "$target_dir" -name "*${oip}*" 2>/dev/null | sort -r | while read -r old_file; do
+        local dir_name base_name new_base
+        dir_name="$(dirname "$old_file")"
+        base_name="$(basename "$old_file")"
+        new_base="${base_name//$oip/$new_ip}"
+        if [[ "$base_name" != "$new_base" ]]; then
+          mv "$old_file" "$dir_name/$new_base"
+        fi
+      done
+    done
+  fi
+
+  # Fallback sed for any generic Endpoint = <IP>: line
+  find "$target_dir" -type f -name "*.conf" -exec sed -i '' -E "s/Endpoint = [0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:/Endpoint = ${new_ip}:/g" {} + 2>/dev/null || true
+
+  # Convert legacy license_*.conf files if any exist
+  convert_legacy_license_files "$target_dir" "$new_ip"
+
+  # Regenerate QR code PNG images for all .conf files
+  if command -v qrencode >/dev/null 2>&1; then
+    log_info "regenerating QR code PNG images in $target_dir..."
+    find "$target_dir" -type f -name "*.conf" 2>/dev/null | while read -r conf_file; do
+      png_file="${conf_file%.conf}.png"
+      qrencode -o "$png_file" < "$conf_file" 2>/dev/null || true
+    done
+  else
+    log_warn "qrencode not found -- PNG QR codes could not be regenerated"
+  fi
+}
+
+cmd_update_configs() {
+  local target="${1:-}"
+  local explicit_ip="${2:-}"
+  local target_dir=""
+  local vm_name=""
+
+  if [[ -z "$target" ]]; then
+    log_info "no target specified -- checking active endpoints in $CONFIGS_DIR..."
+    target="$(prompt_region 2>/dev/null || echo "")"
+  fi
+
+  case "$target" in
+    uk)        vm_name="algo-vpn-uk" ;;
+    australia) vm_name="algo-vpn-australia" ;;
+    usa)       vm_name="algo-vpn-usa" ;;
+    algo-vpn-*) vm_name="$target" ;;
+    *)
+      if [[ "$target" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ && -z "$explicit_ip" ]]; then
+        explicit_ip="$target"
+        target=""
+      elif [[ -d "$CONFIGS_DIR/$target" ]]; then
+        target_dir="$CONFIGS_DIR/$target"
+      elif [[ -d "$target" ]]; then
+        target_dir="$target"
+      fi
+      ;;
+  esac
+
+  if [[ -z "$target_dir" && -n "$vm_name" ]]; then
+    if [[ -L "$CONFIGS_DIR/$vm_name" ]]; then
+      target_dir="$CONFIGS_DIR/$(readlink "$CONFIGS_DIR/$vm_name")"
+    elif [[ -d "$CONFIGS_DIR/$vm_name" ]]; then
+      target_dir="$CONFIGS_DIR/$vm_name"
+    fi
+  fi
+
+  if [[ -z "$target_dir" ]]; then
+    local first_dir
+    first_dir="$(find "$CONFIGS_DIR" -maxdepth 1 -type d ! -path "$CONFIGS_DIR" 2>/dev/null | head -n 1)"
+    if [[ -n "$first_dir" ]]; then
+      target_dir="$first_dir"
+    fi
+  fi
+
+  [[ -n "$target_dir" && -d "$target_dir" ]] || die "could not locate config directory for target: ${target:-unknown}"
+
+  local old_ip
+  old_ip="$(basename "$target_dir")"
+
+  local new_ip="$explicit_ip"
+  if [[ -z "$new_ip" && -n "$vm_name" ]]; then
+    log_info "querying Azure for live public IP of '$vm_name'..."
+    new_ip="$(az vm show -d -g "$RESOURCE_GROUP" -n "$vm_name" --query publicIps -o tsv 2>/dev/null || true)"
+  fi
+
+  if [[ -z "$new_ip" ]]; then
+    if [[ "$old_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+      new_ip="$old_ip"
+    else
+      new_ip="$(grep -rE -o 'Endpoint = [0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' "$target_dir" 2>/dev/null | head -n 1 | cut -d' ' -f3 | cut -d: -f1 || true)"
+    fi
+  fi
+
+  [[ -n "$new_ip" ]] || die "could not determine new IP for config directory $target_dir"
+
+  # If new_ip is different from target_dir name, rename folder and symlink
+  if [[ "$old_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ && "$old_ip" != "$new_ip" ]]; then
+    local new_target_dir="$CONFIGS_DIR/$new_ip"
+    mv "$target_dir" "$new_target_dir"
+    target_dir="$new_target_dir"
+    if [[ -n "$vm_name" ]]; then
+      ln -sfn "$new_ip" "$CONFIGS_DIR/$vm_name"
+    fi
+    log_info "renamed config folder $old_ip -> $new_ip and updated symlinks"
+  fi
+
+  update_config_folder_ip "$target_dir" "$new_ip" "${old_ip:-}"
+
+  local client_conf
+  client_conf="$(select_mac_client_conf "$target_dir" "$new_ip")"
+  if [[ -n "$vm_name" ]]; then
+    import_wireguard_gui "$client_conf" "$vm_name" "${old_ip:-}"
+  fi
+
+  echo
+  echo "=================================================="
+  echo " Configs & QR Codes updated in: $target_dir"
+  echo " Server IP: $new_ip"
+  echo "=================================================="
+
+  render_ipad_qr_code "$target_dir" "$new_ip"
 }
 
 cmd_create() {
@@ -784,9 +949,6 @@ cmd_rotate_ip() {
     fi
 
     if [[ -n "$target_dir" && -d "$target_dir" ]]; then
-      log_info "updating local WireGuard configs in $target_dir with new endpoint IP $new_ip..."
-      find "$target_dir" -type f -name "*.conf" -exec sed -i '' -E "s/Endpoint = [0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:/Endpoint = ${new_ip}:/g" {} +
-
       # Rename directory to new IP if target_dir is named as an old IP
       if [[ "$(basename "$target_dir")" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ && "$(basename "$target_dir")" != "$new_ip" ]]; then
         local new_target_dir="$CONFIGS_DIR/$new_ip"
@@ -796,18 +958,7 @@ cmd_rotate_ip() {
         log_info "renamed config folder to $new_target_dir and updated symlink $CONFIGS_DIR/$vm_name"
       fi
 
-      # Rename files inside target_dir to start with new IP if they started with old IP
-      if [[ -n "${old_ip:-}" && "$old_ip" != "$new_ip" ]]; then
-        find "$target_dir" -type f -name "${old_ip}-*" 2>/dev/null | while read -r old_file; do
-          local fname
-          fname="$(basename "$old_file")"
-          local new_file
-          new_file="$(dirname "$old_file")/${new_ip}-${fname#${old_ip}-}"
-          mv "$old_file" "$new_file"
-        done
-      fi
-
-      convert_legacy_license_files "$target_dir" "$new_ip"
+      update_config_folder_ip "$target_dir" "$new_ip" "${old_ip:-}"
 
       # Clean up old IP address directories in CONFIGS_DIR that are no longer referenced by any active symlink
       find "$CONFIGS_DIR" -maxdepth 1 -type d 2>/dev/null | while read -r dir; do
@@ -820,15 +971,6 @@ cmd_rotate_ip() {
           fi
         fi
       done
-
-      # If qrencode is available, regenerate all QR code PNG images
-      if command -v qrencode >/dev/null 2>&1; then
-        log_info "regenerating QR code PNG images in $target_dir/wireguard..."
-        find "$target_dir/wireguard" -name "*.conf" 2>/dev/null | while read -r conf_file; do
-          png_file="${conf_file%.conf}.png"
-          qrencode -o "$png_file" < "$conf_file" 2>/dev/null || true
-        done
-      fi
 
       local client_conf
       client_conf="$(select_mac_client_conf "$target_dir" "$new_ip")"
@@ -869,12 +1011,13 @@ if [[ "${1:-}" == "vpn" ]]; then
 fi
 
 case "${1:-}" in
-  create)             shift; cmd_create "${1:-}" ;;
-  replace)            shift; cmd_replace "${1:-}" ;;
-  rotate-ip|rotate)   shift; cmd_rotate_ip "${1:-}" ;;
-  inspect|inspection) shift; cmd_inspect "${1:-}" ;;
-  list)               cmd_list ;;
-  destroy)            shift; cmd_destroy "${1:-}" "${2:-}" ;;
+  create)                      shift; cmd_create "${1:-}" ;;
+  replace)                     shift; cmd_replace "${1:-}" ;;
+  rotate-ip|rotate)            shift; cmd_rotate_ip "${1:-}" ;;
+  update-configs|regenerate-qr) shift; cmd_update_configs "${1:-}" ;;
+  inspect|inspection)          shift; cmd_inspect "${1:-}" ;;
+  list)                        cmd_list ;;
+  destroy)                     shift; cmd_destroy "${1:-}" "${2:-}" ;;
   *) usage ;;
 esac
 

@@ -54,6 +54,30 @@ ensure_tool() {
     || die "required command not found: $1 -- this should ship with macOS/Linux, so something unusual about this machine needs a look"
 }
 
+ensure_qrencode() {
+  if command -v qrencode >/dev/null 2>&1; then
+    log_info "qrencode already installed"
+    return
+  fi
+  log_warn "qrencode not found -- installing to enable PNG & terminal QR code generation"
+  case "$(uname -s)" in
+    Darwin)
+      if command -v brew >/dev/null 2>&1; then
+        brew install qrencode
+      fi
+      ;;
+    Linux)
+      if command -v apt-get >/dev/null 2>&1; then
+        sudo apt-get install -y qrencode
+      elif command -v dnf >/dev/null 2>&1; then
+        sudo dnf install -y qrencode
+      elif command -v yum >/dev/null 2>&1; then
+        sudo yum install -y qrencode
+      fi
+      ;;
+  esac
+}
+
 ensure_login() {
   if az account show >/dev/null 2>&1; then
     local sub
@@ -67,6 +91,7 @@ ensure_login() {
 
 log_info "checking prerequisites for algo-vpn.sh"
 ensure_az
+ensure_qrencode
 for tool in ssh curl base64 tar; do
   ensure_tool "$tool"
 done

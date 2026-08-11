@@ -199,10 +199,12 @@ render_ipad_qr_code() {
   local target_dir="$1"
   local ip_prefix="$2"
   local ipad_conf=""
-  if [[ -f "$target_dir/wireguard/${ip_prefix}-ipad.conf" ]]; then
+  if [[ -n "$ip_prefix" && -f "$target_dir/wireguard/${ip_prefix}-ipad.conf" ]]; then
     ipad_conf="$target_dir/wireguard/${ip_prefix}-ipad.conf"
   elif [[ -f "$target_dir/wireguard/license_1.conf" ]]; then
     ipad_conf="$target_dir/wireguard/license_1.conf"
+  else
+    ipad_conf="$(find "$target_dir/wireguard" -name "*-ipad.conf" 2>/dev/null | head -n 1 || true)"
   fi
 
   if command -v qrencode >/dev/null 2>&1 && [[ -n "${ipad_conf:-}" && -f "$ipad_conf" ]]; then
@@ -211,6 +213,12 @@ render_ipad_qr_code() {
     echo " QR CODE FOR IPAD SCAN (Client Config: $(basename "$ipad_conf")):"
     echo "=================================================="
     qrencode -t ansiutf8 < "$ipad_conf"
+  else
+    if ! command -v qrencode >/dev/null 2>&1; then
+      log_warn "qrencode not found -- terminal QR code display skipped"
+    else
+      log_warn "iPad configuration file not found in $target_dir -- terminal QR code display skipped"
+    fi
   fi
 }
 
@@ -267,7 +275,8 @@ update_config_folder_ip() {
         old_ips+=("$detected_ip")
       fi
     fi
-  done < <(grep -r -a -h -E -o '([0-9]{1,3}\.){3}[0-9]{1,3}' "$target_dir" 2>/dev/null \
+  done < <(find "$target_dir" -type f \( -name "*.conf" -o -name "*.mobileconfig" -o -name "*.secrets" -o -name "*.yml" -o -name "*.sswan" -o -name "index.txt" \) 2>/dev/null \
+    | xargs grep -h -E -o '([0-9]{1,3}\.){3}[0-9]{1,3}' 2>/dev/null \
     | grep -v -E '^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|127\.|0\.0\.0\.0|1\.1\.1\.1|8\.8\.8\.8|8\.8\.4\.4)' \
     | sort -u || true)
 
@@ -279,8 +288,8 @@ update_config_folder_ip() {
         sedi_replace "$oip" "$new_ip" "$f"
       done
 
-      # Rename files/directories containing old IP in their filename
-      find "$target_dir" -name "*${oip}*" 2>/dev/null | sort -r | while read -r old_file; do
+      # Rename files/directories INSIDE target_dir containing old IP in their filename (-mindepth 1 prevents renaming target_dir itself)
+      find "$target_dir" -mindepth 1 -name "*${oip}*" 2>/dev/null | sort -r | while read -r old_file; do
         local dir_name base_name new_base
         dir_name="$(dirname "$old_file")"
         base_name="$(basename "$old_file")"

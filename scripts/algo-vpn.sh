@@ -214,18 +214,29 @@ render_ipad_qr_code() {
   fi
 }
 
+sedi() {
+  if sed --version 2>&1 | grep -q GNU; then
+    sed -i "$@"
+  else
+    sed -i '' "$@"
+  fi
+}
+
 update_config_folder_ip() {
   local target_dir="$1"
   local new_ip="$2"
-  local old_ip="${3:-}"
+  shift 2 || true
+  local additional_ips=("$@")
 
   [[ -d "$target_dir" ]] || return 0
   log_info "updating local configs and regenerating QR codes in $target_dir for IP $new_ip..."
 
   local old_ips=()
-  if [[ -n "$old_ip" ]]; then
-    old_ips+=("$old_ip")
-  fi
+  for aip in "${additional_ips[@]:-}"; do
+    if [[ -n "$aip" && "$aip" != "$new_ip" ]]; then
+      old_ips+=("$aip")
+    fi
+  done
 
   # Detect any old IPv4 addresses in text files inside target_dir that aren't private/DNS IPs
   while read -r detected_ip; do
@@ -243,16 +254,16 @@ update_config_folder_ip() {
         old_ips+=("$detected_ip")
       fi
     fi
-  done < <(grep -rE -o '([0-9]{1,3}\.){3}[0-9]{1,3}' "$target_dir" 2>/dev/null \
-    | grep -v -E ':(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|127\.|0\.0\.0\.0|1\.1\.1\.1|8\.8\.8\.8|8\.8\.4\.4)' \
-    | cut -d: -f2 | sort -u || true)
+  done < <(grep -r -a -h -E -o '([0-9]{1,3}\.){3}[0-9]{1,3}' "$target_dir" 2>/dev/null \
+    | grep -v -E '^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|127\.|0\.0\.0\.0|1\.1\.1\.1|8\.8\.8\.8|8\.8\.4\.4)' \
+    | sort -u || true)
 
   # Update all text files with new IP for each detected old IP
   if [[ ${#old_ips[@]} -gt 0 ]]; then
     for oip in "${old_ips[@]}"; do
       log_info "replacing old IP reference $oip -> $new_ip in $target_dir"
       find "$target_dir" -type f \( -name "*.conf" -o -name "*.mobileconfig" -o -name "*.secrets" -o -name "*.yml" -o -name "*.sswan" -o -name "index.txt" \) \
-        -exec sed -i '' "s/${oip}/${new_ip}/g" {} + 2>/dev/null || true
+        -exec bash -c 'sedi() { if sed --version 2>&1 | grep -q GNU; then sed -i "$@"; else sed -i "" "$@"; fi; }; for f; do sedi "s/'"$oip"'/'"$new_ip"'/g" "$f"; done' bash {} + 2>/dev/null || true
 
       # Rename files/directories containing old IP in their filename
       find "$target_dir" -name "*${oip}*" 2>/dev/null | sort -r | while read -r old_file; do
@@ -268,7 +279,8 @@ update_config_folder_ip() {
   fi
 
   # Fallback sed for any generic Endpoint = <IP>: line
-  find "$target_dir" -type f -name "*.conf" -exec sed -i '' -E "s/Endpoint = [0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:/Endpoint = ${new_ip}:/g" {} + 2>/dev/null || true
+  find "$target_dir" -type f -name "*.conf" \
+    -exec bash -c 'sedi() { if sed --version 2>&1 | grep -q GNU; then sed -i "$@"; else sed -i "" "$@"; fi; }; for f; do sedi -E "s/Endpoint = [0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:/Endpoint = '"$new_ip"':/g" "$f"; done' bash {} + 2>/dev/null || true
 
   # Convert legacy license_*.conf files if any exist
   convert_legacy_license_files "$target_dir" "$new_ip"
@@ -934,10 +946,12 @@ cmd_rotate_ip() {
       sleep 2
     done
 
+    local remote_initial_ip=""
     if $ssh_ready; then
       local remote_cfg_dir
       remote_cfg_dir="$(ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 -o BatchMode=yes "$ADMIN_USER@$new_ip" "find /home/$ADMIN_USER/algo-vpn/configs -maxdepth 1 -type d ! -path '*/configs' | head -n 1" 2>/dev/null || true)"
       if [[ -n "$remote_cfg_dir" ]]; then
+        remote_initial_ip="$(basename "$remote_cfg_dir")"
         target_dir="$CONFIGS_DIR/$new_ip"
         mkdir -p "$target_dir"
         log_info "syncing authentic client configs from remote VM ($remote_cfg_dir)..."
@@ -958,7 +972,7 @@ cmd_rotate_ip() {
         log_info "renamed config folder to $new_target_dir and updated symlink $CONFIGS_DIR/$vm_name"
       fi
 
-      update_config_folder_ip "$target_dir" "$new_ip" "${old_ip:-}"
+      update_config_folder_ip "$target_dir" "$new_ip" "${old_ip:-}" "${remote_initial_ip:-}"
 
       # Clean up old IP address directories in CONFIGS_DIR that are no longer referenced by any active symlink
       find "$CONFIGS_DIR" -maxdepth 1 -type d 2>/dev/null | while read -r dir; do

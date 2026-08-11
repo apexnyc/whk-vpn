@@ -214,11 +214,24 @@ render_ipad_qr_code() {
   fi
 }
 
-sedi() {
+sedi_replace() {
+  local search="$1"
+  local replace="$2"
+  local file="$3"
   if sed --version 2>&1 | grep -q GNU; then
-    sed -i "$@"
+    sed -i "s/${search}/${replace}/g" "$file" 2>/dev/null || true
   else
-    sed -i '' "$@"
+    sed -i '' "s/${search}/${replace}/g" "$file" 2>/dev/null || true
+  fi
+}
+
+sedi_replace_endpoint() {
+  local new_ip="$1"
+  local file="$2"
+  if sed --version 2>&1 | grep -q GNU; then
+    sed -i -E "s/Endpoint = [0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:/Endpoint = ${new_ip}:/g" "$file" 2>/dev/null || true
+  else
+    sed -i '' -E "s/Endpoint = [0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:/Endpoint = ${new_ip}:/g" "$file" 2>/dev/null || true
   fi
 }
 
@@ -262,8 +275,9 @@ update_config_folder_ip() {
   if [[ ${#old_ips[@]} -gt 0 ]]; then
     for oip in "${old_ips[@]}"; do
       log_info "replacing old IP reference $oip -> $new_ip in $target_dir"
-      find "$target_dir" -type f \( -name "*.conf" -o -name "*.mobileconfig" -o -name "*.secrets" -o -name "*.yml" -o -name "*.sswan" -o -name "index.txt" \) \
-        -exec bash -c 'sedi() { if sed --version 2>&1 | grep -q GNU; then sed -i "$@"; else sed -i "" "$@"; fi; }; for f; do sedi "s/'"$oip"'/'"$new_ip"'/g" "$f"; done' bash {} + 2>/dev/null || true
+      find "$target_dir" -type f \( -name "*.conf" -o -name "*.mobileconfig" -o -name "*.secrets" -o -name "*.yml" -o -name "*.sswan" -o -name "index.txt" \) 2>/dev/null | while read -r f; do
+        sedi_replace "$oip" "$new_ip" "$f"
+      done
 
       # Rename files/directories containing old IP in their filename
       find "$target_dir" -name "*${oip}*" 2>/dev/null | sort -r | while read -r old_file; do
@@ -279,8 +293,9 @@ update_config_folder_ip() {
   fi
 
   # Fallback sed for any generic Endpoint = <IP>: line
-  find "$target_dir" -type f -name "*.conf" \
-    -exec bash -c 'sedi() { if sed --version 2>&1 | grep -q GNU; then sed -i "$@"; else sed -i "" "$@"; fi; }; for f; do sedi -E "s/Endpoint = [0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:/Endpoint = '"$new_ip"':/g" "$f"; done' bash {} + 2>/dev/null || true
+  find "$target_dir" -type f -name "*.conf" 2>/dev/null | while read -r f; do
+    sedi_replace_endpoint "$new_ip" "$f"
+  done
 
   # Convert legacy license_*.conf files if any exist
   convert_legacy_license_files "$target_dir" "$new_ip"

@@ -935,31 +935,31 @@ cmd_rotate_ip() {
       target_dir="$CONFIGS_DIR/$vm_name"
     fi
 
-    # Check if remote SSH is reachable to sync real configs if missing/stale
-    log_info "checking SSH connection to new IP $new_ip..."
-    local ssh_ready=false
-    for _ in $(seq 1 6); do
-      if ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 -o BatchMode=yes "$ADMIN_USER@$new_ip" "test -d /home/$ADMIN_USER/algo-vpn/configs" 2>/dev/null; then
-        ssh_ready=true
-        break
-      fi
-      sleep 2
-    done
-
     local remote_initial_ip=""
-    if $ssh_ready; then
-      local remote_cfg_dir
-      remote_cfg_dir="$(ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 -o BatchMode=yes "$ADMIN_USER@$new_ip" "find /home/$ADMIN_USER/algo-vpn/configs -maxdepth 1 -type d ! -path '*/configs' | head -n 1" 2>/dev/null || true)"
-      if [[ -n "$remote_cfg_dir" ]]; then
-        remote_initial_ip="$(basename "$remote_cfg_dir")"
-        target_dir="$CONFIGS_DIR/$new_ip"
-        mkdir -p "$target_dir"
-        log_info "syncing authentic client configs from remote VM ($remote_cfg_dir)..."
-        ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -o BatchMode=yes "$ADMIN_USER@$new_ip" "cd '$remote_cfg_dir' && tar czf - ." | tar xzf - -C "$target_dir"
-        ln -sfn "$new_ip" "$CONFIGS_DIR/$vm_name"
+    # Only attempt SSH download if local configs are missing completely
+    if [[ -z "$target_dir" || ! -d "$target_dir" ]]; then
+      log_info "no local configs found for $vm_name -- checking SSH connection to $new_ip to fetch remote configs..."
+      local ssh_ready=false
+      if ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=3 -o BatchMode=yes "$ADMIN_USER@$new_ip" "test -d /home/$ADMIN_USER/algo-vpn/configs" 2>/dev/null; then
+        ssh_ready=true
+      fi
+
+      if $ssh_ready; then
+        local remote_cfg_dir
+        remote_cfg_dir="$(ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=5 -o BatchMode=yes "$ADMIN_USER@$new_ip" "find /home/$ADMIN_USER/algo-vpn/configs -maxdepth 1 -type d ! -path '*/configs' | head -n 1" 2>/dev/null || true)"
+        if [[ -n "$remote_cfg_dir" ]]; then
+          remote_initial_ip="$(basename "$remote_cfg_dir")"
+          target_dir="$CONFIGS_DIR/$new_ip"
+          mkdir -p "$target_dir"
+          log_info "syncing authentic client configs from remote VM ($remote_cfg_dir)..."
+          ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -o BatchMode=yes "$ADMIN_USER@$new_ip" "cd '$remote_cfg_dir' && tar czf - ." | tar xzf - -C "$target_dir"
+          ln -sfn "$new_ip" "$CONFIGS_DIR/$vm_name"
+        fi
+      else
+        log_warn "SSH connection to new IP $new_ip not ready or blocked -- proceeding with local config generation"
       fi
     else
-      log_warn "SSH connection to new IP $new_ip not ready yet -- proceeding with local configs"
+      log_info "local configs found for $vm_name -- skipping remote SSH sync"
     fi
 
     if [[ -n "$target_dir" && -d "$target_dir" ]]; then

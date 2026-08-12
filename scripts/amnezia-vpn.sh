@@ -675,12 +675,172 @@ cmd_replace() {
   cmd_create "$region"
 }
 
+cmd_rotate_ip() {
+  local target="${1:-}"
+  require_cmd az; require_cmd curl; require_az_login
+
+  local vm_name="" region=""
+  case "$target" in
+    uk|australia|usa)
+      region="$target"
+      region_to_params "$region"
+      vm_name="$VM_NAME"
+      ;;
+    awg-vpn-uk|awg-vpn-australia|awg-vpn-usa)
+      vm_name="$target"
+      region="${vm_name#awg-vpn-}"
+      region_to_params "$region"
+      ;;
+    "")
+      region="$(prompt_region)"
+      region_to_params "$region"
+      vm_name="$VM_NAME"
+      ;;
+    *)
+      vm_name="$target"
+      region="${vm_name#awg-vpn-}"
+      region_to_params "$region"
+      ;;
+  esac
+
+  log_info "starting fast public IP rotation for '$vm_name'..."
+
+  local vm_json
+  vm_json="$(az vm show -d -g "$RESOURCE_GROUP" -n "$vm_name" -o json 2>/dev/null || true)"
+  [[ -n "$vm_json" ]] || die "VM '$vm_name' not found in resource group '$RESOURCE_GROUP'"
+
+  local old_ip nic_name ip_config_name
+  old_ip="$(printf '%s' "$vm_json" | jq -r '.publicIps // empty' 2>/dev/null || true)"
+
+  nic_name="$(az network nic list -g "$RESOURCE_GROUP" --query "[?contains(name, '$vm_name')].name | [0]" -o tsv)"
+  [[ -n "$nic_name" ]] || die "could not find NIC for $vm_name"
+
+  ip_config_name="$(az network nic show -g "$RESOURCE_GROUP" -n "$nic_name" --query "ipConfigurations[0].name" -o tsv)"
+  [[ -n "$ip_config_name" ]] || die "could not find IP config for NIC $nic_name"
+
+  local old_pip_name
+  old_pip_name="$(az network public-ip list -g "$RESOURCE_GROUP" --query "[?contains(name, '$vm_name')].name | [0]" -o tsv)"
+
+  local timestamp
+  timestamp="$(date +%s)"
+  local new_pip_name="${vm_name}PublicIP-${timestamp}"
+
+  log_info "creating new Azure Public IP '$new_pip_name' in $LOCATION..."
+  az network public-ip create \
+    -g "$RESOURCE_GROUP" \
+    -n "$new_pip_name" \
+    -l "$LOCATION" \
+    --sku Standard \
+    --allocation-method Static \
+    -o none
+
+  log_info "attaching new Public IP to NIC '$nic_name'..."
+  az network nic ip-config update \
+    -g "$RESOURCE_GROUP" \
+    --nic-name "$nic_name" \
+    -n "$ip_config_name" \
+    --public-ip-address "$new_pip_name" \
+    -o none
+
+  local new_ip
+  new_ip="$(az network public-ip show -g "$RESOURCE_GROUP" -n "$new_pip_name" --query ipAddress -o tsv)"
+  [[ -n "$new_ip" ]] || die "failed to resolve new Public IP"
+
+  log_info "VM new Public IP is $new_ip (was ${old_ip:-unknown})"
+
+  if [[ -n "$old_pip_name" && "$old_pip_name" != "$new_pip_name" ]]; then
+    log_info "deleting old Public IP '$old_pip_name'..."
+    az network public-ip delete -g "$RESOURCE_GROUP" -n "$old_pip_name" -o none || log_warn "could not delete old Public IP $old_pip_name"
+  fi
+
+  local target_dir=""
+  if [[ -L "$CONFIGS_DIR/$vm_name" ]]; then
+    target_dir="$CONFIGS_DIR/$(readlink "$CONFIGS_DIR/$vm_name")"
+  elif [[ -d "$CONFIGS_DIR/$vm_name" ]]; then
+    target_dir="$CONFIGS_DIR/$vm_name"
+  fi
+
+  if [[ -n "$target_dir" && -d "$target_dir" ]]; then
+    local new_target_dir="$CONFIGS_DIR/$new_ip"
+    if [[ "$target_dir" != "$new_target_dir" ]]; then
+      mv "$target_dir" "$new_target_dir"
+      target_dir="$new_target_dir"
+      ln -sfn "$new_ip" "$CONFIGS_DIR/$vm_name"
+    fi
+
+    for f in "$target_dir"/*.conf; do
+      [[ -f "$f" && ! -L "$f" ]] || continue
+      local fname
+      fname="$(basename "$f")"
+      local dev_part
+      dev_part="$(echo "$fname" | sed -E 's/^([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+-)?//')"
+
+      if [[ -n "$old_ip" ]]; then
+        sed -i '' "s/$old_ip/$new_ip/g" "$f" 2>/dev/null || sed -i "s/$old_ip/$new_ip/g" "$f"
+      fi
+
+      local new_fname="${new_ip}-${dev_part}"
+      if [[ "$fname" != "$new_fname" ]]; then
+        mv "$f" "$target_dir/$new_fname"
+      fi
+    done
+
+    for dev in macbook macmini iphone ipad ios android windows; do
+      local conf_f="$target_dir/${new_ip}-${dev}.conf"
+      if [[ -f "$conf_f" ]]; then
+        ln -sfn "${new_ip}-${dev}.conf" "$target_dir/${dev}.conf"
+        qrencode -o "$target_dir/${new_ip}-${dev}_qr.png" < "$conf_f" 2>/dev/null || true
+        ln -sfn "${new_ip}-${dev}_qr.png" "$target_dir/${dev}_qr.png"
+        qrencode -t ansiutf8 < "$conf_f" > "$target_dir/${new_ip}-${dev}_qr.txt" 2>/dev/null || true
+        ln -sfn "${new_ip}-${dev}_qr.txt" "$target_dir/${dev}_qr.txt"
+      fi
+    done
+
+    cp "$target_dir/${new_ip}-macbook.conf" "$target_dir/$vm_name.conf" 2>/dev/null || true
+
+    if [[ -d "/Applications/AmneziaWG.app" ]]; then
+      log_info "auto-importing updated $vm_name.conf into AmneziaWG GUI..."
+      osascript -e '
+      on run argv
+        set confPath to item 1 of argv
+        tell application "AmneziaWG" to activate
+        delay 0.5
+        tell application "System Events"
+          tell process "AmneziaWG"
+            keystroke "o" using {command down}
+            delay 1.0
+            keystroke "g" using {command down, shift down}
+            delay 1.0
+            keystroke confPath
+            delay 0.5
+            keystroke return
+            delay 0.8
+            keystroke return
+          end tell
+        end tell
+      end run' "$target_dir/$vm_name.conf" >/dev/null 2>&1 || log_warn "could not auto-import into AmneziaWG GUI"
+    fi
+  fi
+
+  echo
+  echo "=================================================="
+  echo " Fast IP Rotation Complete for: $vm_name"
+  echo " Old IP: ${old_ip:-unknown}"
+  echo " New IP: $new_ip"
+  echo " Configs updated in: $CONFIGS_DIR/$vm_name ($target_dir)"
+  echo "=================================================="
+  echo
+  echo "--- SCAN NEW QR CODE WITH IPHONE (AMNEZIAWG APP) ---"
+  cat "$target_dir/${new_ip}-iphone_qr.txt" 2>/dev/null || cat "$target_dir/iphone_qr.txt" 2>/dev/null || true
+}
+
 case "${1:-}" in
-  create)             shift; cmd_create "${1:-}" ;;
-  replace)            shift; cmd_replace "${1:-}" ;;
-  inspect|inspection) shift; cmd_inspect "${1:-}" ;;
-  qr|qrcode)          shift; cmd_qr "${1:-}" "${2:-}" ;;
-  list)               cmd_list ;;
-  destroy)            shift; cmd_destroy "${1:-}" "${2:-}" ;;
+  create)                      shift; cmd_create "${1:-}" ;;
+  replace)                     shift; cmd_replace "${1:-}" ;;
+  rotate-ip|rotate)            shift; cmd_rotate_ip "${1:-}" ;;
+  inspect|inspection)          shift; cmd_inspect "${1:-}" ;;
+  qr|qrcode)                   shift; cmd_qr "${1:-}" "${2:-}" ;;
+  list)                        cmd_list ;;
+  destroy)                     shift; cmd_destroy "${1:-}" "${2:-}" ;;
   *) usage ;;
 esac

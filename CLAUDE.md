@@ -2,51 +2,56 @@
 
 Censorship-resistant personal VPN endpoints on Azure, for use from mainland China.
 
-## Algo VPN (current approach)
+## AmneziaWG (Primary Anti-GFW Flow)
 
-`scripts/algo-vpn.sh` (also copied to `~/Command/algo-vpn.sh` for convenience
-on this machine) provisions and tears down Algo VPN endpoints. It runs
-[apexnyc/algo-vpn](https://github.com/apexnyc/algo-vpn) — a fork of
-trailofbits/algo patched to skip every interactive prompt and stream its
-generated client configs back over the same SSH session, instead of needing
-a separate pull step.
+`scripts/amnezia-vpn.sh` (invoked via `vpn` command or `scripts/vpn.sh`) provisions and manages AmneziaWG endpoints (`awg-vpn-usa`, `awg-vpn-uk`, `awg-vpn-australia`). AmneziaWG randomizes WireGuard header parameters (`Jc`, `Jmin`, `Jmax`, `S1`, `S2`, `H1-H4`) to defeat GFW Deep Packet Inspection (DPI).
 
-On a machine that doesn't have the Azure CLI yet, run
-`scripts/setup-environment.sh` first — installs `az` (Homebrew on macOS,
-Microsoft's apt/dnf repo on Linux) and runs `az login` if needed. Safe to
-re-run; every check is a no-op once already satisfied.
+Provisioning takes **~30 seconds** and generates 7 client profiles & PNG QR code image files stored in `~/Desktop/vpn/<public-ip>/` (symlinked at `~/Desktop/vpn/awg-vpn-<region>/`):
+* `<public-ip>-macbook.conf` (Auto-imported into macOS `/Applications/AmneziaWG.app`)
+* `<public-ip>-macmini.conf`
+* `<public-ip>-iphone.conf` & `<public-ip>-iphone_qr.png`
+* `<public-ip>-ipad.conf` & `<public-ip>-ipad_qr.png`
+* `<public-ip>-ios.conf` & `<public-ip>-ios_qr.png`
+* `<public-ip>-android.conf` & `<public-ip>-android_qr.png`
+* `<public-ip>-windows.conf` & `<public-ip>-windows_qr.png`
 
 ```bash
-# Create an endpoint. Omit the region for an interactive 1/2/3 prompt.
-vpn create uk          # uksouth        -> VM algo-vpn-uk
-vpn create australia   # australiaeast  -> VM algo-vpn-australia
-vpn create usa         # eastus         -> VM algo-vpn-usa
+# Create an AmneziaWG endpoint (defaults to AmneziaWG)
+vpn create usa         # eastus         -> VM awg-vpn-usa (~30s)
+vpn create uk          # uksouth        -> VM awg-vpn-uk
+vpn create australia   # australiaeast  -> VM awg-vpn-australia
 
-# Inspect why a VPN endpoint is blocked or unreachable (Azure, GFW DPI, IP null-route)
-vpn inspect usa        # or: vpn inspect algo-vpn-usa
-vpn inspect uk
+# Inspect why an endpoint is unreachable (detects Azure status, SSH, AWG daemon, GFW IP null-route vs DPI)
+vpn inspect usa        # or: vpn inspect awg-vpn-usa
 
-# Fast IP rotation (swap Azure public IP in ~15s without deleting VM or configs)
+# Replace endpoint with a fresh Azure IP and new random noise parameters
+vpn replace usa
+
+# Fast IP rotation (swaps Azure Public IP in ~15s without deleting VM)
 vpn rotate-ip usa
 
-# See what's currently running
+# Display QR code on terminal for a device
+vpn qr usa iphone
+vpn qr usa ipad
+
+# List all active VPN VMs in resource group kwang-vpn
 vpn list
 
-# Tear down one endpoint by name -- only that VM and its own NIC/public
-# IP/NSG/disk are deleted; other VMs in the resource group are untouched.
-vpn destroy algo-vpn-uk
-vpn destroy algo-vpn-uk --yes   # skip the type-to-confirm prompt
+# Tear down one endpoint by VM name
+vpn destroy awg-vpn-usa
+vpn destroy awg-vpn-usa --yes   # skip confirm prompt
 ```
 
-All three regions share the `kwang-vpn` resource group and can run at the same
-time. Generated WireGuard/IPsec client configs land in
-`~/Desktop/vpn/<public-ip>/` (created if it doesn't exist), with a friendly
-symlink at `~/Desktop/vpn/<vm-name>` pointing at it.
+## Algo WireGuard (Legacy Flow)
 
-## Amnezia VPN (earlier approach, retired)
+`scripts/algo-vpn.sh` remains 100% supported for standard WireGuard provisioning:
 
-The `kwang7/amnezia-azure-provisioning` branch holds an earlier, GUI-client-based
-approach using AmneziaVPN. Superseded by Algo above because Amnezia's official
-client has no headless install mode, which made unattended, repeatable
-provisioning impossible. Kept as history, not deleted — see that branch's
-`docs/superpowers/` for the full design record.
+```bash
+# Create legacy Algo WireGuard endpoint
+vpn create --engine algo usa     # eastus -> VM algo-vpn-usa (~10-15m)
+vpn inspect algo-vpn-usa
+vpn rotate-ip algo-vpn-usa
+vpn destroy algo-vpn-usa --yes
+```
+
+All regions share the `kwang-vpn` resource group. Generated client configs land in `~/Desktop/vpn/<public-ip>/`.

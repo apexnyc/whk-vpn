@@ -5,10 +5,9 @@
 # to Azure. Safe to re-run; every step is a no-op once already satisfied.
 set -euo pipefail
 
-log_info()  { printf '[INFO]  %s\n'  "$*" >&2; }
-log_warn()  { printf '[WARN]  %s\n'  "$*" >&2; }
-log_error() { printf '[ERROR] %s\n'  "$*" >&2; }
-die() { log_error "$*"; exit 1; }
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=common.sh
+source "$SCRIPT_DIR/common.sh"
 
 install_az_macos() {
   if ! command -v brew >/dev/null 2>&1; then

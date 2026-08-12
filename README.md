@@ -43,15 +43,19 @@ Manage endpoints using the unified [`scripts/vpn.sh`](file:///Users/kwang7/Proje
 
 ### Create an Endpoint
 
-Provision a new AmneziaWG endpoint (default) or legacy Algo endpoint in `uk`, `australia`, or `usa`:
+Provision a new AmneziaWG endpoint (default) or legacy Algo endpoint using lowercase country names (`japan`, `korea`, `singapore`, `hongkong`, `usa`, `uk`, `australia`, `germany`, `france`, `canada`, etc.) or raw Azure region names (`japaneast`, `koreacentral`, `eastus`):
 
 ```bash
-vpn create usa                         # AmneziaWG eastus         -> VM awg-vpn-usa (~30s)
+vpn create japan                       # AmneziaWG japaneast      -> VM awg-vpn-japan (~30s)
+vpn create korea                       # AmneziaWG koreacentral   -> VM awg-vpn-korea
+vpn create singapore                   # AmneziaWG southeastasia  -> VM awg-vpn-singapore
+vpn create hongkong                    # AmneziaWG eastasia       -> VM awg-vpn-hongkong
+vpn create usa                         # AmneziaWG eastus         -> VM awg-vpn-usa
 vpn create uk                          # AmneziaWG uksouth        -> VM awg-vpn-uk
 vpn create australia                   # AmneziaWG australiaeast  -> VM awg-vpn-australia
 
 # Legacy Algo WireGuard:
-vpn create --engine algo usa          # Algo WireGuard           -> VM algo-vpn-usa (~10-15m)
+vpn create --engine algo japan        # Algo WireGuard           -> VM algo-vpn-japan (~10-15m)
 ```
 
 ### Inspect an Endpoint
@@ -110,6 +114,7 @@ vpn destroy algo-vpn-uk --yes           # skip confirmation prompt
 │   ├── vpn.sh                            # Unified CLI entrypoint controller
 │   ├── amnezia-vpn.sh                    # AmneziaWG provisioner, QR generator & inspector (~30s build)
 │   ├── algo-vpn.sh                       # Legacy Algo WireGuard provisioner & inspector
+│   ├── common.sh                         # Shared region resolution, logging & Azure utilities
 │   └── setup-environment.sh              # Prerequisites installer & Azure CLI authenticator
 └── docs/
     ├── amneziawg-client-guide.md         # AmneziaWG client setup & App Store guide

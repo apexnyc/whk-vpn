@@ -13,76 +13,32 @@
 # (DPI) by randomizing packet headers (Jc, Jmin, Jmax, S1, S2, H1-H4).
 set -euo pipefail
 
-RESOURCE_GROUP="kwang-vpn"
-ADMIN_USER="kwang7"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=common.sh
+source "$SCRIPT_DIR/common.sh"
+
 VM_SIZE="Standard_B1s"
 IMAGE="Canonical:ubuntu-24_04-lts:server:24.04.202608020"
 WIREGUARD_PORT=51820
-CONFIGS_DIR="$HOME/Desktop/vpn"
-
-log_info()  { printf '[INFO]  %s\n'  "$*" >&2; }
-log_warn()  { printf '[WARN]  %s\n'  "$*" >&2; }
-log_error() { printf '[ERROR] %s\n'  "$*" >&2; }
-die() { log_error "$*"; exit 1; }
-
-require_cmd() { command -v "$1" >/dev/null 2>&1 || die "required command not found: $1 (run scripts/setup-environment.sh)"; }
-
-require_az_login() {
-  az account show >/dev/null 2>&1 || die "not logged in to Azure. Run: az login"
-}
-
-detect_public_ip() {
-  local ip
-  local services=(
-    "https://api.ipify.org"
-    "https://icanhazip.com"
-    "https://ifconfig.me"
-    "https://ipinfo.io/ip"
-    "https://ident.me"
-  )
-  for svc in "${services[@]}"; do
-    ip="$(curl -fsS --max-time 5 "$svc" 2>/dev/null | tr -d '[:space:]' || true)"
-    if [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-      printf '%s' "$ip"
-      return 0
-    fi
-  done
-  die "could not determine your public IP"
-}
 
 usage() {
   cat >&2 <<'EOF'
 Usage:
-  amnezia-vpn.sh create [uk|australia|usa]
-  amnezia-vpn.sh replace [uk|australia|usa]
-  amnezia-vpn.sh inspect [uk|australia|usa|vm-name]
+  amnezia-vpn.sh create [country|region]
+  amnezia-vpn.sh replace [country|region]
+  amnezia-vpn.sh inspect [country|region|vm-name]
   amnezia-vpn.sh list
   amnezia-vpn.sh destroy <vm-name> [--yes]
+
+Examples:
+  amnezia-vpn.sh create japan
+  amnezia-vpn.sh create korea
+  amnezia-vpn.sh create singapore
+  amnezia-vpn.sh create hongkong
+  amnezia-vpn.sh create usa
+  amnezia-vpn.sh create uk
 EOF
   exit 1
-}
-
-region_to_params() {
-  case "$1" in
-    uk)        LOCATION="uksouth";       VM_NAME="awg-vpn-uk" ;;
-    australia) LOCATION="australiaeast"; VM_NAME="awg-vpn-australia" ;;
-    usa)       LOCATION="eastus";        VM_NAME="awg-vpn-usa" ;;
-    *) die "unknown region '$1' -- choose uk, australia, or usa" ;;
-  esac
-}
-
-prompt_region() {
-  echo "Which region for AmneziaWG?" >&2
-  echo "  1) UK        (uksouth)" >&2
-  echo "  2) Australia (australiaeast)" >&2
-  echo "  3) USA       (eastus)" >&2
-  read -r -p "Enter 1-3: " choice
-  case "$choice" in
-    1) echo uk ;;
-    2) echo australia ;;
-    3) echo usa ;;
-    *) die "invalid choice: $choice" ;;
-  esac
 }
 
 cmd_create() {
@@ -447,10 +403,12 @@ cmd_qr() {
 
   local vm_name=""
   case "$target" in
-    uk|australia|usa) vm_name="awg-vpn-$target" ;;
-    awg-vpn-*)        vm_name="$target" ;;
-    "")               vm_name="awg-vpn-usa" ;;
-    *)                vm_name="$target" ;;
+    awg-vpn-*) vm_name="$target" ;;
+    "")        vm_name="awg-vpn-usa" ;;
+    *)
+      region_to_params "$target"
+      vm_name="$VM_NAME"
+      ;;
   esac
 
   local target_dir="$CONFIGS_DIR/$vm_name"
@@ -516,32 +474,26 @@ cmd_inspect() {
 
   local vm_name="" region=""
   case "$target" in
-    uk|australia|usa)
-      region="$target"
-      region_to_params "$region"
-      vm_name="$VM_NAME"
-      ;;
-    awg-vpn-uk|awg-vpn-australia|awg-vpn-usa)
+    awg-vpn-*)
       vm_name="$target"
       region="${vm_name#awg-vpn-}"
-      region_to_params "$region"
       ;;
     "")
       log_info "Available AWG VMs in resource group '$RESOURCE_GROUP':"
       cmd_list
       echo >&2
-      read -r -p "Enter VM name or region (uk|australia|usa): " choice
+      read -r -p "Enter VM name or region/country (e.g. japan, korea, uk): " choice
       [[ -n "$choice" ]] || die "no VM specified"
-      if [[ "$choice" =~ ^(uk|australia|usa)$ ]]; then
-        region="$choice"
-        region_to_params "$region"
-        vm_name="$VM_NAME"
-      else
+      if [[ "$choice" =~ ^awg-vpn- ]]; then
         vm_name="$choice"
+      else
+        region_to_params "$choice"
+        vm_name="$VM_NAME"
       fi
       ;;
     *)
-      vm_name="$target"
+      region_to_params "$target"
+      vm_name="$VM_NAME"
       ;;
   esac
 
@@ -681,12 +633,7 @@ cmd_rotate_ip() {
 
   local vm_name="" region=""
   case "$target" in
-    uk|australia|usa)
-      region="$target"
-      region_to_params "$region"
-      vm_name="$VM_NAME"
-      ;;
-    awg-vpn-uk|awg-vpn-australia|awg-vpn-usa)
+    awg-vpn-*)
       vm_name="$target"
       region="${vm_name#awg-vpn-}"
       region_to_params "$region"
@@ -697,9 +644,8 @@ cmd_rotate_ip() {
       vm_name="$VM_NAME"
       ;;
     *)
-      vm_name="$target"
-      region="${vm_name#awg-vpn-}"
-      region_to_params "$region"
+      region_to_params "$target"
+      vm_name="$VM_NAME"
       ;;
   esac
 

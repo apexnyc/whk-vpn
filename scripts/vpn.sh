@@ -6,28 +6,40 @@
 #   --engine algo               : Legacy standard Algo WireGuard (~10-15m deploy)
 #
 # Usage:
-#   vpn.sh create [--engine amneziawg|algo] [uk|australia|usa]
-#   vpn.sh replace [--engine amneziawg|algo] [uk|australia|usa]
-#   vpn.sh inspect [uk|australia|usa|vm-name]
+#   vpn.sh create [--engine amneziawg|algo] [country|region]
+#   vpn.sh replace [--engine amneziawg|algo] [country|region]
+#   vpn.sh inspect [country|region|vm-name]
 #   vpn.sh list
 #   vpn.sh destroy <vm-name> [--yes]
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RESOURCE_GROUP="kwang-vpn"
-
-log_info()  { printf '[INFO]  %s\n'  "$*" >&2; }
-log_error() { printf '[ERROR] %s\n'  "$*" >&2; }
-die() { log_error "$*"; exit 1; }
+# shellcheck source=common.sh
+source "$SCRIPT_DIR/common.sh"
 
 usage() {
   cat >&2 <<'EOF'
 Usage:
-  vpn create [--engine amneziawg|algo] [uk|australia|usa]
-  vpn replace [--engine amneziawg|algo] [uk|australia|usa]
-  vpn inspect [uk|australia|usa|vm-name]
+  vpn create [--engine amneziawg|algo] [country|region]
+  vpn replace [--engine amneziawg|algo] [country|region]
+  vpn inspect [country|region|vm-name]
+  vpn rotate-ip [country|region|vm-name]
+  vpn qr [country|region|vm-name] [device]
   vpn list
   vpn destroy <vm-name> [--yes]
+
+Examples:
+  vpn create japan
+  vpn create korea
+  vpn create singapore
+  vpn create hongkong
+  vpn create germany
+  vpn create france
+  vpn create netherlands
+  vpn create canada
+  vpn create usa
+  vpn create uk
+  vpn create australia
 EOF
   exit 1
 }
@@ -72,7 +84,7 @@ case "$CMD" in
     exec "$PROVISIONER" replace "${1:-}"
     ;;
   list)
-    az account show >/dev/null 2>&1 || die "not logged in to Azure. Run: az login"
+    require_az_login
     log_info "Listing all active VPN endpoints in resource group '$RESOURCE_GROUP':"
     az vm list -g "$RESOURCE_GROUP" -d --query "[].{name:name, ip:publicIps, location:location, state:powerState}" -o table
     ;;
@@ -91,16 +103,21 @@ case "$CMD" in
       exec "$SCRIPT_DIR/amnezia-vpn.sh" inspect "$TARGET"
     elif [[ "$TARGET" =~ ^algo-vpn- ]]; then
       exec "$SCRIPT_DIR/algo-vpn.sh" inspect "$TARGET"
-    else
-      # Check if VM exists in Azure to inspect appropriately
-      if az vm show -g "$RESOURCE_GROUP" -n "awg-vpn-$TARGET" >/dev/null 2>&1; then
-        exec "$SCRIPT_DIR/amnezia-vpn.sh" inspect "$TARGET"
-      elif az vm show -g "$RESOURCE_GROUP" -n "algo-vpn-$TARGET" >/dev/null 2>&1; then
-        exec "$SCRIPT_DIR/algo-vpn.sh" inspect "$TARGET"
+    elif [[ -n "$TARGET" ]]; then
+      region_to_params "$TARGET" "awg-vpn-"
+      awg_vm="$VM_NAME"
+      region_to_params "$TARGET" "algo-vpn-"
+      algo_vm="$VM_NAME"
+
+      if az vm show -g "$RESOURCE_GROUP" -n "$awg_vm" >/dev/null 2>&1; then
+        exec "$SCRIPT_DIR/amnezia-vpn.sh" inspect "$awg_vm"
+      elif az vm show -g "$RESOURCE_GROUP" -n "$algo_vm" >/dev/null 2>&1; then
+        exec "$SCRIPT_DIR/algo-vpn.sh" inspect "$algo_vm"
       else
-        # Default to AmneziaWG inspector
         exec "$SCRIPT_DIR/amnezia-vpn.sh" inspect "$TARGET"
       fi
+    else
+      exec "$SCRIPT_DIR/amnezia-vpn.sh" inspect ""
     fi
     ;;
   qr|qrcode)

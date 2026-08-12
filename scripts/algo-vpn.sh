@@ -16,79 +16,35 @@
 # scripts/setup-environment.sh first.
 set -euo pipefail
 
-RESOURCE_GROUP="kwang-vpn"
-ADMIN_USER="kwang7"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=common.sh
+source "$SCRIPT_DIR/common.sh"
+
 VM_SIZE="Standard_B1s"
 IMAGE="Canonical:ubuntu-24_04-lts:server:24.04.202608020"
 ALGO_REPO="https://github.com/apexnyc/algo-vpn.git"
 WIREGUARD_PORT=51820
-CONFIGS_DIR="$HOME/Desktop/vpn"
-
-log_info()  { printf '[INFO]  %s\n'  "$*" >&2; }
-log_warn()  { printf '[WARN]  %s\n'  "$*" >&2; }
-log_error() { printf '[ERROR] %s\n'  "$*" >&2; }
-die() { log_error "$*"; exit 1; }
-
-require_cmd() { command -v "$1" >/dev/null 2>&1 || die "required command not found: $1 (run scripts/setup-environment.sh)"; }
-
-require_az_login() {
-  az account show >/dev/null 2>&1 || die "not logged in to Azure. Run: az login"
-}
-
-detect_public_ip() {
-  local ip
-  local services=(
-    "https://api.ipify.org"
-    "https://icanhazip.com"
-    "https://ifconfig.me"
-    "https://ipinfo.io/ip"
-    "https://ident.me"
-  )
-  for svc in "${services[@]}"; do
-    ip="$(curl -fsS --max-time 5 "$svc" 2>/dev/null | tr -d '[:space:]' || true)"
-    if [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-      printf '%s' "$ip"
-      return 0
-    fi
-  done
-  die "could not determine your public IP"
-}
 
 usage() {
   cat >&2 <<'EOF'
 Usage:
-  algo-vpn.sh create [uk|australia|usa]
-  algo-vpn.sh replace [uk|australia|usa]
-  algo-vpn.sh rotate-ip [uk|australia|usa]
-  algo-vpn.sh update-configs [uk|australia|usa|<ip>]
-  algo-vpn.sh inspect [uk|australia|usa]
+  algo-vpn.sh create [country|region]
+  algo-vpn.sh replace [country|region]
+  algo-vpn.sh rotate-ip [country|region]
+  algo-vpn.sh update-configs [country|region|<ip>]
+  algo-vpn.sh inspect [country|region|vm-name]
   algo-vpn.sh list
   algo-vpn.sh destroy <vm-name> [--yes]
+
+Examples:
+  algo-vpn.sh create japan
+  algo-vpn.sh create korea
+  algo-vpn.sh create singapore
+  algo-vpn.sh create hongkong
+  algo-vpn.sh create usa
+  algo-vpn.sh create uk
 EOF
   exit 1
-}
-
-region_to_params() {
-  case "$1" in
-    uk)        LOCATION="uksouth";       VM_NAME="algo-vpn-uk" ;;
-    australia) LOCATION="australiaeast"; VM_NAME="algo-vpn-australia" ;;
-    usa)       LOCATION="eastus";        VM_NAME="algo-vpn-usa" ;;
-    *) die "unknown region '$1' -- choose uk, australia, or usa" ;;
-  esac
-}
-
-prompt_region() {
-  echo "Which region?" >&2
-  echo "  1) UK        (uksouth)" >&2
-  echo "  2) Australia (australiaeast)" >&2
-  echo "  3) USA       (eastus)" >&2
-  read -r -p "Enter 1-3: " choice
-  case "$choice" in
-    1) echo uk ;;
-    2) echo australia ;;
-    3) echo usa ;;
-    *) die "invalid choice: $choice" ;;
-  esac
 }
 
 convert_legacy_license_files() {
@@ -416,8 +372,8 @@ cmd_update_configs() {
 
 cmd_create() {
   local region="${1:-}"
-  [[ -n "$region" ]] || region="$(prompt_region)"
-  region_to_params "$region"
+  [[ -n "$region" ]] || region="$(prompt_region "Algo WireGuard")"
+  region_to_params "$region" "algo-vpn-"
 
   require_cmd az; require_cmd ssh; require_cmd curl; require_cmd base64; require_cmd tar
   require_az_login
@@ -611,16 +567,6 @@ cmd_inspect() {
 
   local vm_name="" region=""
   case "$target" in
-    uk|australia|usa)
-      region="$target"
-      region_to_params "$region"
-      vm_name="$VM_NAME"
-      ;;
-    algo-vpn-uk|algo-vpn-australia|algo-vpn-usa)
-      vm_name="$target"
-      region="${vm_name#algo-vpn-}"
-      region_to_params "$region"
-      ;;
     algo-vpn-*)
       vm_name="$target"
       region="${vm_name#algo-vpn-}"
@@ -629,20 +575,18 @@ cmd_inspect() {
       log_info "No VM specified. Available VMs in resource group '$RESOURCE_GROUP':"
       cmd_list
       echo >&2
-      read -r -p "Enter VM name or region (uk|australia|usa): " choice
+      read -r -p "Enter VM name or region/country (e.g. japan, korea, uk): " choice
       [[ -n "$choice" ]] || die "no VM specified"
-      if [[ "$choice" =~ ^(uk|australia|usa)$ ]]; then
-        region="$choice"
-        region_to_params "$region"
-        vm_name="$VM_NAME"
-      else
+      if [[ "$choice" =~ ^algo-vpn- ]]; then
         vm_name="$choice"
-        region="${vm_name#algo-vpn-}"
+      else
+        region_to_params "$choice" "algo-vpn-"
+        vm_name="$VM_NAME"
       fi
       ;;
     *)
-      vm_name="$target"
-      region="${vm_name#algo-vpn-}"
+      region_to_params "$target" "algo-vpn-"
+      vm_name="$VM_NAME"
       ;;
   esac
 
@@ -878,25 +822,19 @@ cmd_rotate_ip() {
 
   local vm_name="" region=""
   case "$target" in
-    uk|australia|usa)
-      region="$target"
-      region_to_params "$region"
-      vm_name="$VM_NAME"
-      ;;
-    algo-vpn-uk|algo-vpn-australia|algo-vpn-usa)
+    algo-vpn-*)
       vm_name="$target"
       region="${vm_name#algo-vpn-}"
-      region_to_params "$region"
+      region_to_params "$region" "algo-vpn-"
       ;;
     "")
-      region="$(prompt_region)"
-      region_to_params "$region"
+      region="$(prompt_region "Algo WireGuard")"
+      region_to_params "$region" "algo-vpn-"
       vm_name="$VM_NAME"
       ;;
     *)
-      vm_name="$target"
-      region="${vm_name#algo-vpn-}"
-      region_to_params "$region"
+      region_to_params "$target" "algo-vpn-"
+      vm_name="$VM_NAME"
       ;;
   esac
 
@@ -1029,8 +967,8 @@ cmd_rotate_ip() {
 
 cmd_replace() {
   local region="${1:-}"
-  [[ -n "$region" ]] || region="$(prompt_region)"
-  region_to_params "$region"
+  [[ -n "$region" ]] || region="$(prompt_region "Algo WireGuard")"
+  region_to_params "$region" "algo-vpn-"
 
   require_cmd az; require_az_login
 
